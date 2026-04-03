@@ -15,9 +15,14 @@ const ZOOM_MIN = 0.35;
 const ZOOM_MAX = 8;
 const VIEWPORT_H = 420;
 const MIN_WORLD = 6;
-/** Mål for håndtak og kant på skjermen (piksler) — verdensstørrelse = dette / zoom pga. ytre scale(zoom). */
-const HANDLE_SCREEN_PX = 11;
-const BBOX_BORDER_SCREEN_PX = 2;
+/** Overlay tegnes i viewport-piksler (utenfor scale); hit-slop i verden = dette / zoom for jevn skjermflate. */
+const HANDLE_SCREEN_PX = 12;
+const BBOX_OVERLAY_BORDER_PX = 2;
+const HIT_SLOP_SCREEN_PX = 18;
+
+function hitSlopWorld(zoom: number): number {
+  return HIT_SLOP_SCREEN_PX / Math.max(zoom, ZOOM_MIN);
+}
 
 function clamp(n: number, a: number, b: number) {
   return Math.max(a, Math.min(b, n));
@@ -290,7 +295,7 @@ export default function ReviewBboxEditor({ imageUrl, modelBbox, value, onChange 
     const dw = drawn.w;
     const dh = drawn.h;
     const z = viewRef.current.zoom;
-    const slop = Math.max(8, 14 / z);
+    const slop = hitSlopWorld(z);
 
     if (effectiveBbox) {
       const wb = normToWorldBox(effectiveBbox, dw, dh);
@@ -314,7 +319,7 @@ export default function ReviewBboxEditor({ imageUrl, modelBbox, value, onChange 
     const r = vp.getBoundingClientRect();
     const { ix, iy } = viewportToWorld(e.clientX - r.left, e.clientY - r.top);
     const z = viewRef.current.zoom;
-    const slop = Math.max(8, 14 / z);
+    const slop = hitSlopWorld(z);
     if (effectiveBbox) {
       const wb = normToWorldBox(effectiveBbox, drawn.w, drawn.h);
       setHoverHit(hitTest(ix, iy, wb, slop));
@@ -391,10 +396,16 @@ export default function ReviewBboxEditor({ imageUrl, modelBbox, value, onChange 
         ? normToWorldRect(effectiveBbox)
         : null;
 
-  const borderWorld = Math.max(0.35, BBOX_BORDER_SCREEN_PX / zoom);
-  const handleWorld = Math.max(0.5, HANDLE_SCREEN_PX / zoom);
   const renderHandles = rectWorld && effectiveBbox && interact?.k !== "new";
-  const hw = handleWorld;
+  const rectScreen =
+    rectWorld != null
+      ? {
+          left: rectWorld.left * zoom + panX,
+          top: rectWorld.top * zoom + panY,
+          width: rectWorld.width * zoom,
+          height: rectWorld.height * zoom,
+        }
+      : null;
 
   const vpCursor = panDrag ? "grabbing" : interact ? "crosshair" : cursorForHit(hoverHit);
 
@@ -403,7 +414,7 @@ export default function ReviewBboxEditor({ imageUrl, modelBbox, value, onChange 
       <p className="muted" style={{ fontSize: 12 }}>
         <strong>Zoom:</strong> mushjul · <strong>Pan:</strong> midtklikk / Alt / Shift+dra ·{" "}
         <strong>Bbox:</strong> dra på tom flate · <strong>Flytt:</strong> dra inni boksen ·{" "}
-        <strong>Skaler:</strong> hjørner og kanter — håndtak og kantlinje holder ca. fast størrelse på skjermen ved zoom.
+        <strong>Skaler:</strong> hjørner og kanter — overlay følger zoom i bildekoordinater; håndtak og treffflate er i skjerm-piksler.
       </p>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 6 }}>
         <button type="button" className="secondary" onClick={() => onChange(modelBbox ? { ...modelBbox } : null)}>
@@ -466,58 +477,73 @@ export default function ReviewBboxEditor({ imageUrl, modelBbox, value, onChange 
               onLoad={layoutImage}
               draggable={false}
             />
-            {rectWorld && (
+          </div>
+          {rectScreen && (
+            <div
+              style={{
+                position: "absolute",
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+                pointerEvents: "none",
+                zIndex: 1,
+              }}
+            >
               <div
                 style={{
                   position: "absolute",
-                  left: rectWorld.left,
-                  top: rectWorld.top,
-                  width: rectWorld.width,
-                  height: rectWorld.height,
+                  left: rectScreen.left,
+                  top: rectScreen.top,
+                  width: Math.max(0, rectScreen.width),
+                  height: Math.max(0, rectScreen.height),
                   border:
                     interact?.k === "new"
-                      ? `${borderWorld}px dashed var(--warn)`
-                      : `${borderWorld}px solid var(--accent)`,
+                      ? `${BBOX_OVERLAY_BORDER_PX}px dashed var(--warn)`
+                      : `${BBOX_OVERLAY_BORDER_PX}px solid var(--accent)`,
                   boxSizing: "border-box",
                   pointerEvents: "none",
                 }}
               />
-            )}
-            {renderHandles &&
-              rectWorld &&
-              (["nw", "n", "ne", "e", "se", "s", "sw", "w"] as HandleId[]).map((hid) => {
-                const { left, top, width, height } = rectWorld;
-                const cx = left + width / 2;
-                const cy = top + height / 2;
-                const pos: Record<HandleId, [number, number]> = {
-                  nw: [left, top],
-                  n: [cx, top],
-                  ne: [left + width, top],
-                  e: [left + width, cy],
-                  se: [left + width, top + height],
-                  s: [cx, top + height],
-                  sw: [left, top + height],
-                  w: [left, cy],
-                };
-                const [hx, hy] = pos[hid];
-                return (
-                  <div
-                    key={hid}
-                    style={{
-                      position: "absolute",
-                      left: hx - hw / 2,
-                      top: hy - hw / 2,
-                      width: hw,
-                      height: hw,
-                      background: "var(--accent)",
-                      border: `${Math.max(0.35, 1 / zoom)}px solid var(--text)`,
-                      boxSizing: "border-box",
-                      pointerEvents: "none",
-                    }}
-                  />
-                );
-              })}
-          </div>
+              {renderHandles &&
+                rectWorld &&
+                (["nw", "n", "ne", "e", "se", "s", "sw", "w"] as HandleId[]).map((hid) => {
+                  const { left, top, width, height } = rectWorld;
+                  const cx = left + width / 2;
+                  const cy = top + height / 2;
+                  const pos: Record<HandleId, [number, number]> = {
+                    nw: [left, top],
+                    n: [cx, top],
+                    ne: [left + width, top],
+                    e: [left + width, cy],
+                    se: [left + width, top + height],
+                    s: [cx, top + height],
+                    sw: [left, top + height],
+                    w: [left, cy],
+                  };
+                  const [wx, wy] = pos[hid];
+                  const hl = HANDLE_SCREEN_PX;
+                  const sl = wx * zoom + panX - hl / 2;
+                  const st = wy * zoom + panY - hl / 2;
+                  return (
+                    <div
+                      key={hid}
+                      style={{
+                        position: "absolute",
+                        left: sl,
+                        top: st,
+                        width: hl,
+                        height: hl,
+                        background: "var(--accent)",
+                        border: "1px solid var(--text)",
+                        boxSizing: "border-box",
+                        pointerEvents: "none",
+                      }}
+                    />
+                  );
+                })}
+            </div>
+          )}
         </div>
         <div className="card" style={{ padding: 10, minWidth: 220, maxWidth: 240 }}>
           <p className="muted" style={{ fontSize: 11, marginBottom: 8 }}>
