@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import AnnotationCropPreview from "@/components/AnnotationCropPreview";
 import { parseBbox, ruleBasedAnnotationSummaryLines } from "@/lib/annotationLearning";
-import { API_BASE } from "@/lib/api";
+import { API_BASE, fileUrl } from "@/lib/api";
 
 type Row = {
   id: number;
@@ -99,7 +99,7 @@ export default function AnnotationsPage() {
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
           <thead>
             <tr style={{ textAlign: "left", borderBottom: "1px solid var(--border)" }}>
-              <th style={{ padding: "0.35rem" }}>Bilde</th>
+              <th style={{ padding: "0.35rem" }}>Bilde (original)</th>
               <th style={{ padding: "0.35rem" }}>Utsnitt</th>
               <th style={{ padding: "0.35rem", minWidth: 200 }}>Dataoppsummering (regelbasert i appen)</th>
               <th style={{ padding: "0.35rem" }}>Modell (oppr.)</th>
@@ -117,10 +117,27 @@ export default function AnnotationsPage() {
               const prev = previewForRow(r);
               return (
               <tr key={r.id} style={{ borderBottom: "1px solid var(--border)" }}>
-                <td style={{ padding: "0.35rem", whiteSpace: "nowrap" }}>
-                  #{r.image_id}
-                  <br />
-                  <span className="muted">{r.filename}</span>
+                <td style={{ padding: "0.35rem", verticalAlign: "top", maxWidth: 260 }}>
+                  <div className="muted" style={{ whiteSpace: "nowrap", marginBottom: 6 }}>
+                    #{r.image_id}
+                    <br />
+                    {r.filename}
+                  </div>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={fileUrl(r.image_id, "original")}
+                    alt=""
+                    style={{
+                      display: "block",
+                      maxWidth: "100%",
+                      maxHeight: 180,
+                      width: "auto",
+                      height: "auto",
+                      objectFit: "contain",
+                      borderRadius: 4,
+                      border: "1px solid var(--border)",
+                    }}
+                  />
                 </td>
                 <td style={{ padding: "0.35rem", verticalAlign: "top" }}>
                   <AnnotationCropPreview imageId={r.image_id} bbox={prev.bbox} source={prev.source} />
