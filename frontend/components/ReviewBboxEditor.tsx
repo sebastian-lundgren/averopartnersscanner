@@ -14,7 +14,8 @@ type Props = {
 const ZOOM_MIN = 0.35;
 const ZOOM_MAX = 8;
 const VIEWPORT_H = 420;
-const MIN_WORLD = 6;
+/** Minste kantlengde i «drawn»-piksler (ikke skjerm); holder boksen fra å kollapse til 0 uten å låse stor min.størrelse. */
+const MIN_WORLD = 0.5;
 /** Overlay tegnes i viewport-piksler (utenfor scale); hit-slop i verden = dette / zoom for jevn skjermflate. */
 const HANDLE_SCREEN_PX = 12;
 const BBOX_OVERLAY_BORDER_PX = 2;
@@ -371,7 +372,9 @@ export default function ReviewBboxEditor({ imageUrl, modelBbox, value, onChange 
       if (!interact) return;
       if (interact.k === "new") {
         const b = worldToNorm(interact.ax, interact.ay, interact.bx, interact.by);
-        if (b.w > 0.002 && b.h > 0.002) onChange(b);
+        const dw0 = drawn.w;
+        const dh0 = drawn.h;
+        if (b.w * dw0 >= MIN_WORLD && b.h * dh0 >= MIN_WORLD) onChange(b);
       }
       setInteract(null);
     }
@@ -549,7 +552,9 @@ export default function ReviewBboxEditor({ imageUrl, modelBbox, value, onChange 
           <p className="muted" style={{ fontSize: 11, marginBottom: 8 }}>
             Forhåndsvisning av markert boks
           </p>
-          {previewBbox && previewBbox.w > 0.002 && previewBbox.h > 0.002 ? (
+          {previewBbox &&
+          previewBbox.w * drawn.w >= MIN_WORLD &&
+          previewBbox.h * drawn.h >= MIN_WORLD ? (
             <canvas
               ref={previewRef}
               style={{ display: "block", width: 200, height: 200, borderRadius: 4, background: "var(--surface)" }}
