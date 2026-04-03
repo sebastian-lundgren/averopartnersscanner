@@ -169,6 +169,11 @@ export default function ReviewBboxEditor({ imageUrl, modelBbox, value, onChange 
     setView({ zoom: 1, panX: 0, panY: 0 });
   }, [imageUrl]);
 
+  useEffect(() => {
+    setDrawn({ w: 320, h: 240 });
+    setNatural({ w: 1, h: 1 });
+  }, [imageUrl]);
+
   const viewportToWorld = (vx: number, vy: number) => {
     const { zoom: z, panX: px, panY: py } = viewRef.current;
     return { ix: (vx - px) / z, iy: (vy - py) / z };
@@ -441,6 +446,7 @@ export default function ReviewBboxEditor({ imageUrl, modelBbox, value, onChange 
           >
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
+              key={imageUrl}
               ref={imgRef}
               src={imageUrl}
               alt=""
