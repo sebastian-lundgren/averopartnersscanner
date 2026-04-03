@@ -7,6 +7,7 @@ from PIL import Image
 from sqlalchemy.orm import Session
 
 from app import models, schemas
+from app.config import settings
 from app.database import SessionLocal, get_db
 from app.services.active_learning import refresh_prediction_priority
 from app.services.blob_storage import materialize_local_path, store_upload_bytes
@@ -17,9 +18,7 @@ router = APIRouter(prefix="/api/images", tags=["images"])
 
 
 def _run_predictions_after_upload(image_ids: list[int]) -> None:
-    """Grounding DINO / heuristikk — kjøres etter opplasting for å unngå timeout på POST /upload."""
-    from app.services.prediction import run_heuristic_predict
-
+    """Etter opplasting: ML-prediksjon eller plassholder uten torch/HF når ml_inference_enabled=false."""
     db = SessionLocal()
     try:
         model = db.query(models.ModelVersion).filter(models.ModelVersion.is_active.is_(True)).first()
@@ -34,6 +33,28 @@ def _run_predictions_after_upload(image_ids: list[int]) -> None:
                     continue
                 if db.query(models.Prediction).filter(models.Prediction.image_id == iid).first():
                     continue
+                if not settings.ml_inference_enabled:
+                    pred = models.Prediction(
+                        image_id=img.id,
+                        model_version_id=model.id,
+                        predicted_status=models.ReviewStatus.UKLART.value,
+                        confidence=0,
+                        bbox_json=None,
+                        rationale=(
+                            "Automatisk prediksjon er av (ML_INFERENCE_ENABLED=false). "
+                            "Merking skjer manuelt i review."
+                        ),
+                        needs_review=True,
+                        review_completed=False,
+                    )
+                    db.add(pred)
+                    db.flush()
+                    refresh_prediction_priority(db, pred)
+                    db.commit()
+                    continue
+
+                from app.services.prediction import run_heuristic_predict
+
                 local_img, tmp_del = materialize_local_path(img.stored_path, suffix=".upload")
                 try:
                     pred_result = run_heuristic_predict(str(local_img))

@@ -88,10 +88,7 @@ def seed_if_empty():
         if db.query(models.ImageAsset).first():
             return
 
-        from app.services.prediction import run_heuristic_predict
-
         upload_dir = Path(settings.upload_dir)
-        evidence_dir = Path(settings.evidence_dir)
         thr = get_thresholds(db)
         strong = int(thr["threshold_strong_sign"])
 
@@ -112,25 +109,40 @@ def seed_if_empty():
             db.add(img)
             db.flush()
 
-            pr = run_heuristic_predict(img.stored_path)
             import uuid
 
-            ev_path = None
-            if pr.bbox_norm:
-                ev_name = f"ev_seed_{img.id}_{uuid.uuid4().hex[:6]}.jpg"
-                ev_path = save_evidence_crop(img.stored_path, ev_name, pr.bbox_norm)
-                if ev_path:
-                    img.evidence_crop_path = ev_path
+            if settings.ml_inference_enabled:
+                from app.services.prediction import run_heuristic_predict
+
+                pr = run_heuristic_predict(img.stored_path)
+                ev_path = None
+                if pr.bbox_norm:
+                    ev_name = f"ev_seed_{img.id}_{uuid.uuid4().hex[:6]}.jpg"
+                    ev_path = save_evidence_crop(img.stored_path, ev_name, pr.bbox_norm)
+                    if ev_path:
+                        img.evidence_crop_path = ev_path
+                pred_status = pr.status.value
+                pred_conf = pr.confidence
+                pred_bbox = pr.bbox_norm
+                pred_rationale = pr.rationale
+                needs_review = pred_conf < strong or pr.status != models.ReviewStatus.SKILT_FUNNET
+            else:
+                pred_status = models.ReviewStatus.UKLART.value
+                pred_conf = 0
+                pred_bbox = None
+                pred_rationale = (
+                    "Seed uten ML (ML_INFERENCE_ENABLED=false). Merk manuelt i review."
+                )
+                needs_review = True
 
             pred = models.Prediction(
                 image_id=img.id,
                 model_version_id=model.id,
-                predicted_status=pr.status.value,
-                confidence=pr.confidence,
-                bbox_json=pr.bbox_norm,
-                rationale=pr.rationale,
-                needs_review=pr.confidence < strong
-                or pr.status != models.ReviewStatus.SKILT_FUNNET,
+                predicted_status=pred_status,
+                confidence=pred_conf,
+                bbox_json=pred_bbox,
+                rationale=pred_rationale,
+                needs_review=needs_review,
                 review_completed=False,
             )
             db.add(pred)

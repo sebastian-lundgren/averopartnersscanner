@@ -7,7 +7,6 @@ from sqlalchemy.orm import Session, joinedload
 from app import models, schemas
 from app.config import settings
 from app.database import get_db
-from app.services.train_pipeline import maybe_auto_enqueue_after_annotation
 
 router = APIRouter(prefix="/api/reviews", tags=["reviews"])
 
@@ -240,7 +239,10 @@ def submit_review(
 
     db.commit()
     db.refresh(rev)
-    maybe_auto_enqueue_after_annotation()
+    if settings.ml_inference_enabled:
+        from app.services.train_pipeline import maybe_auto_enqueue_after_annotation
+
+        maybe_auto_enqueue_after_annotation()
     return rev
 
 

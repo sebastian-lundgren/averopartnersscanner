@@ -63,6 +63,8 @@ class Settings(BaseSettings):
     yolo_activation_metric: str = "map50_95"
     yolo_activation_min_delta: float = 0.0
     review_claim_ttl_seconds: int = 3600
+    # False på små instanser (f.eks. Render 2 GB): ingen torch/HF/DINO i web-prosessen for opplasting/seed/auto-YOLO-kø.
+    ml_inference_enabled: bool = True
     # Street View scan-runner (Playwright) kaller API
     scanner_api_token: str = ""
 
