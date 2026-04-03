@@ -98,8 +98,8 @@ export default function ReviewPage() {
       const data = raw as QueueItem[];
       setQueue(data);
       setIdx(0);
-      const st = data[0]?.prediction?.predicted_status;
-      if (st) setAnnotationLabel(defaultAnnotationFromPredicted(st));
+      const firstStatus = data[0]?.prediction?.predicted_status;
+      if (firstStatus) setAnnotationLabel(defaultAnnotationFromPredicted(firstStatus));
     } catch (e) {
       setQueue([]);
       setIdx(0);
