@@ -1,0 +1,30 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Node
+node_modules/
+.next/
+npm-debug.log*
+
+# Local env
+backend/.env
+frontend/.env.local
+frontend/.env-kopi.local
+.env
+.env.*
+!.env.example
+!.env.local.example
+
+# Data / uploads / db
+backend/data/
+runner/data/generated/
+*.db
+*.sqlite
+*.sqlite3
+
+# Build / cache
+*.tsbuildinfo
+.DS_Store

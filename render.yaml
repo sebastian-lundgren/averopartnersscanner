@@ -1,0 +1,10 @@
+# Render Blueprint: Web Service for FastAPI (Python).
+# Koble Git-repo, eller lim inn som "Blueprint". Sett secrets i Render Dashboard.
+services:
+  - type: web
+    name: streetview-scanner-api
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    plan: starter
