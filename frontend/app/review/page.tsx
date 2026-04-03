@@ -226,6 +226,8 @@ export default function ReviewPage() {
 
   const p = current.prediction;
   const im = current.image;
+  const originalPreviewUrl = fileUrl(im.id, "original");
+  const evidencePreviewUrl = fileUrl(im.id, "evidence");
 
   return (
     <>
@@ -264,18 +266,26 @@ export default function ReviewPage() {
       <div className="grid2">
         <div className="card">
           <ReviewBboxEditor
-            imageUrl={fileUrl(im.id, "original")}
+            imageUrl={originalPreviewUrl}
             modelBbox={p.bbox_json}
             value={manualBbox}
             onChange={setManualBbox}
           />
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
-            src={fileUrl(im.id, "evidence")}
-            alt="evidens"
+            key={`evidence-thumb-${im.id}`}
+            src={evidencePreviewUrl}
+            alt="Evidensutsnitt"
             style={{ maxWidth: "100%", marginTop: 8 }}
             onError={(e) => {
-              (e.target as HTMLImageElement).style.display = "none";
+              const el = e.currentTarget;
+              if (!el.dataset.fallbackToOriginal) {
+                el.dataset.fallbackToOriginal = "1";
+                el.src = originalPreviewUrl;
+                el.alt = "Original (evidens mangler eller ikke klar ennå)";
+                return;
+              }
+              el.style.display = "none";
             }}
           />
         </div>
