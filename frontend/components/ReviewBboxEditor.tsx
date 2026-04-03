@@ -15,6 +15,9 @@ const ZOOM_MIN = 0.35;
 const ZOOM_MAX = 8;
 const VIEWPORT_H = 420;
 const MIN_WORLD = 6;
+/** Mål for håndtak og kant på skjermen (piksler) — verdensstørrelse = dette / zoom pga. ytre scale(zoom). */
+const HANDLE_SCREEN_PX = 11;
+const BBOX_BORDER_SCREEN_PX = 2;
 
 function clamp(n: number, a: number, b: number) {
   return Math.max(a, Math.min(b, n));
@@ -388,9 +391,10 @@ export default function ReviewBboxEditor({ imageUrl, modelBbox, value, onChange 
         ? normToWorldRect(effectiveBbox)
         : null;
 
-  const handleSizeWorld = Math.max(6, 10 / zoom);
+  const borderWorld = Math.max(0.35, BBOX_BORDER_SCREEN_PX / zoom);
+  const handleWorld = Math.max(0.5, HANDLE_SCREEN_PX / zoom);
   const renderHandles = rectWorld && effectiveBbox && interact?.k !== "new";
-  const hw = handleSizeWorld;
+  const hw = handleWorld;
 
   const vpCursor = panDrag ? "grabbing" : interact ? "crosshair" : cursorForHit(hoverHit);
 
@@ -399,7 +403,7 @@ export default function ReviewBboxEditor({ imageUrl, modelBbox, value, onChange 
       <p className="muted" style={{ fontSize: 12 }}>
         <strong>Zoom:</strong> mushjul · <strong>Pan:</strong> midtklikk / Alt / Shift+dra ·{" "}
         <strong>Bbox:</strong> dra på tom flate · <strong>Flytt:</strong> dra inni boksen ·{" "}
-        <strong>Skaler:</strong> hjørner og kanter (bildekoordinater, stabil ved zoom).
+        <strong>Skaler:</strong> hjørner og kanter — håndtak og kantlinje holder ca. fast størrelse på skjermen ved zoom.
       </p>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 6 }}>
         <button type="button" className="secondary" onClick={() => onChange(modelBbox ? { ...modelBbox } : null)}>
@@ -470,7 +474,10 @@ export default function ReviewBboxEditor({ imageUrl, modelBbox, value, onChange 
                   top: rectWorld.top,
                   width: rectWorld.width,
                   height: rectWorld.height,
-                  border: interact?.k === "new" ? "2px dashed var(--warn)" : "2px solid var(--accent)",
+                  border:
+                    interact?.k === "new"
+                      ? `${borderWorld}px dashed var(--warn)`
+                      : `${borderWorld}px solid var(--accent)`,
                   boxSizing: "border-box",
                   pointerEvents: "none",
                 }}
@@ -503,7 +510,7 @@ export default function ReviewBboxEditor({ imageUrl, modelBbox, value, onChange 
                       width: hw,
                       height: hw,
                       background: "var(--accent)",
-                      border: "1px solid var(--text)",
+                      border: `${Math.max(0.35, 1 / zoom)}px solid var(--text)`,
                       boxSizing: "border-box",
                       pointerEvents: "none",
                     }}
