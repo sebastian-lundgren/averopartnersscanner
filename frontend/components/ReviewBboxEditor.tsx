@@ -211,10 +211,9 @@ export default function ReviewBboxEditor({ imageUrl, modelBbox, value, onChange 
     [drawn.h, drawn.w]
   );
 
-  const previewBbox: BboxNorm | null =
-    interact?.k === "new"
-      ? worldToNorm(interact.ax, interact.ay, interact.bx, interact.by)
-      : effectiveBbox;
+  const newDragNorm: BboxNorm | null =
+    interact?.k === "new" ? worldToNorm(interact.ax, interact.ay, interact.bx, interact.by) : null;
+  const previewBbox: BboxNorm | null = newDragNorm ?? effectiveBbox;
 
   const drawPreview = useCallback(() => {
     const canvas = previewRef.current;
@@ -389,12 +388,8 @@ export default function ReviewBboxEditor({ imageUrl, modelBbox, value, onChange 
   }, [interact, panDrag, drawn.h, drawn.w, onChange, worldToNorm]);
 
   const rectWorld =
-    interact?.k === "new"
-      ? (() => {
-          const l = Math.min(interact.ax, interact.bx);
-          const t = Math.min(interact.ay, interact.by);
-          return { left: l, top: t, width: Math.abs(interact.bx - interact.ax), height: Math.abs(interact.by - interact.ay) };
-        })()
+    newDragNorm != null
+      ? normToWorldRect(newDragNorm)
       : effectiveBbox
         ? normToWorldRect(effectiveBbox)
         : null;
