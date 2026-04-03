@@ -7,8 +7,8 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass
+
 import cv2
-import torch
 from PIL import Image
 
 from app.config import settings
@@ -40,10 +40,12 @@ class _DinoHit:
 _lock = threading.Lock()
 _model = None
 _processor = None
-_device: torch.device | None = None
+_device = None
 
 
-def _pick_device() -> torch.device:
+def _pick_device():
+    import torch
+
     if torch.cuda.is_available():
         return torch.device("cuda")
     if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
@@ -125,6 +127,8 @@ def _dino_infer_or_terminal(
             bbox_norm=None,
             rationale=f"Grounding DINO kunne ikke lastes ({e!s}). Installer torch+transformers og prøv igjen.",
         )
+
+    import torch
 
     phrases = _phrase_list()
     text_labels = [phrases]

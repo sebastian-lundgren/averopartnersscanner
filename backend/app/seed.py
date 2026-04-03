@@ -9,7 +9,6 @@ from app.config import settings
 from app.database import SessionLocal, init_db
 from app.services.active_learning import refresh_prediction_priority
 from app.services.evidence import save_evidence_crop
-from app.services.prediction import run_heuristic_predict
 from app.services.settings_store import ensure_defaults, get_thresholds
 
 
@@ -88,6 +87,8 @@ def seed_if_empty():
 
         if db.query(models.ImageAsset).first():
             return
+
+        from app.services.prediction import run_heuristic_predict
 
         upload_dir = Path(settings.upload_dir)
         evidence_dir = Path(settings.evidence_dir)

@@ -11,7 +11,6 @@ from app.database import SessionLocal, get_db
 from app.services.active_learning import refresh_prediction_priority
 from app.services.blob_storage import materialize_local_path, store_upload_bytes
 from app.services.evidence import save_evidence_crop
-from app.services.prediction import run_heuristic_predict
 from app.services.settings_store import get_thresholds
 
 router = APIRouter(prefix="/api/images", tags=["images"])
@@ -19,6 +18,8 @@ router = APIRouter(prefix="/api/images", tags=["images"])
 
 def _run_predictions_after_upload(image_ids: list[int]) -> None:
     """Grounding DINO / heuristikk — kjøres etter opplasting for å unngå timeout på POST /upload."""
+    from app.services.prediction import run_heuristic_predict
+
     db = SessionLocal()
     try:
         model = db.query(models.ModelVersion).filter(models.ModelVersion.is_active.is_(True)).first()
