@@ -29,9 +29,15 @@ elif _db_url.startswith("postgresql"):
 else:
     _connect_args = {}
 
+engine_kwargs: dict = {}
+if _db_url.startswith("postgresql"):
+    engine_kwargs["pool_pre_ping"] = True
+    engine_kwargs["pool_recycle"] = 300
+
 engine = create_engine(
     _db_url,
     connect_args=_connect_args,
+    **engine_kwargs,
 )
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
