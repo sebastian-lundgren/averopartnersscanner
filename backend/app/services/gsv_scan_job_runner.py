@@ -25,35 +25,38 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
 
-def _default_runner_venv_python(repo: Path) -> Path:
-    # Lokalt: repo/.venv-runner. Render m/rootDir=backend: kun filer under backend/ deployes —
-    # da ligger venv i repo/backend/.venv-runner (se render.yaml).
-    if platform.system() == "Windows":
-        nested = repo / "backend" / ".venv-runner" / "Scripts" / "python.exe"
-        root = repo / ".venv-runner" / "Scripts" / "python.exe"
-    else:
-        nested = repo / "backend" / ".venv-runner" / "bin" / "python"
-        root = repo / ".venv-runner" / "bin" / "python"
-    if nested.is_file():
-        return nested
-    return root
-
-
 def _resolve_runner_python_executable(repo: Path) -> str:
+    """Ikke .resolve() på interpretator: venv/bin/python-symlink kan hoppe ut av venv."""
     raw = (settings.gsv_scan_runner_python or "").strip()
     if raw:
         p = Path(raw).expanduser()
         if not p.is_absolute():
             p = repo / p
-    else:
-        p = _default_runner_venv_python(repo)
-    # Ikke .resolve() på interpretator: venv/bin/python er symlink til f.eks. Homebrew;
-    # resolve() følger lenken og subprocess mister venv (ingen playwright).
-    if not p.is_file():
+        if p.is_file():
+            return os.fspath(p)
         raise FileNotFoundError(
-            f"Mangler runner-Python ({p}). Opprett .venv-runner med Playwright eller sett GSV_SCAN_RUNNER_PYTHON."
+            f"GSV_SCAN_RUNNER_PYTHON peker på manglende fil ({p}). "
+            "Sjekk sti eller fjern variabelen for automatisk valg."
         )
-    return os.fspath(p)
+
+    if platform.system() == "Windows":
+        candidates = (
+            repo / "backend" / ".venv-runner" / "Scripts" / "python.exe",
+            repo / ".venv-runner" / "Scripts" / "python.exe",
+        )
+    else:
+        candidates = (
+            repo / "backend" / ".venv-runner" / "bin" / "python",
+            repo / ".venv-runner" / "bin" / "python",
+        )
+    for cand in candidates:
+        if cand.is_file():
+            return os.fspath(cand)
+
+    raise FileNotFoundError(
+        "Mangler runner-Python. Forventet backend/.venv-runner (f.eks. Render) eller "
+        ".venv-runner i repo-rot (lokalt), med Playwright — eller sett GSV_SCAN_RUNNER_PYTHON."
+    )
 
 
 def create_gsv_scan_job(
