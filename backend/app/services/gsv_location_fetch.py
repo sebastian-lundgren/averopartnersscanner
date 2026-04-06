@@ -153,7 +153,40 @@ def _write_overpass_cache(pc: str, raw_text: str) -> None:
         log.debug("Overpass: kunne ikke skrive cache: %s", e)
 
 
-def _post_overpass(endpoint: str, query: str) -> str:
+def _snippet(s: str, n: int = 300) -> str:
+    t = (s or "")[:n]
+    return t if len(s or "") <= n else t + "…"
+
+
+def _parse_overpass_response_body(
+    raw_text: str,
+    *,
+    http_status: int | None,
+    http_content_type: str | None,
+    context: str,
+) -> dict:
+    if not (raw_text or "").strip():
+        if http_status is not None:
+            raise OverpassFetchError(
+                f"Overpass svarte tom body (HTTP {http_status}) content-type={http_content_type!r} "
+                f"mot {context}"
+            )
+        raise OverpassFetchError(f"Overpass tom tekst ({context})")
+    try:
+        return json.loads(raw_text)
+    except json.JSONDecodeError as e:
+        sn = _snippet(raw_text)
+        if http_status is not None:
+            raise OverpassFetchError(
+                f"Overpass ugyldig JSON: {e} | HTTP {http_status} content-type={http_content_type!r} "
+                f"body_snippet={sn!r}"
+            ) from e
+        raise OverpassFetchError(
+            f"Overpass ugyldig JSON: {e} | body_snippet={sn!r} ({context})"
+        ) from e
+
+
+def _post_overpass(endpoint: str, query: str) -> tuple[int, str, str]:
     body = urllib.parse.urlencode({"data": query}).encode("utf-8")
     req = urllib.request.Request(
         endpoint,
@@ -164,19 +197,40 @@ def _post_overpass(endpoint: str, query: str) -> str:
     time.sleep(REQUEST_PAUSE_S)
     try:
         with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT_S) as resp:
-            return resp.read().decode("utf-8")
+            status = int(resp.getcode())
+            ctype = (resp.headers.get("Content-Type") or "").strip()
+            raw = resp.read().decode("utf-8", errors="replace")
     except TimeoutError as e:
         raise OverpassFetchError(f"Overpass HTTP-timeout etter {HTTP_TIMEOUT_S}s mot {endpoint}: {e}") from e
     except urllib.error.HTTPError as e:
-        raise OverpassFetchError(f"Overpass HTTP {e.code} mot {endpoint}: {e.reason}") from e
+        try:
+            err_body = e.read().decode("utf-8", errors="replace")
+        except Exception:
+            err_body = ""
+        ctype = (e.headers.get("Content-Type") or "").strip() if e.headers else ""
+        raise OverpassFetchError(
+            f"Overpass HTTP {e.code} mot {endpoint} content-type={ctype!r} "
+            f"body_snippet={_snippet(err_body)!r} ({e.reason})"
+        ) from e
     except urllib.error.URLError as e:
         raise OverpassFetchError(f"Overpass nettverksfeil mot {endpoint}: {e}") from e
 
+    if status != 200:
+        raise OverpassFetchError(
+            f"Overpass uventet HTTP {status} mot {endpoint} content-type={ctype!r} "
+            f"body_snippet={_snippet(raw)!r}"
+        )
+    if not raw.strip():
+        raise OverpassFetchError(
+            f"Overpass svarte tom body (HTTP {status}) mot {endpoint} content-type={ctype!r}"
+        )
+    return status, ctype, raw
 
-def _fetch_overpass_with_retries(postcode: str) -> str:
+
+def _fetch_overpass_with_retries(postcode: str) -> tuple[int, str, str]:
     """
     Prøv flere endepunkter, retry ved gateway/rate-limit, deretter spissere spørring uten relation.
-    Returnerer rå JSON-tekst eller kaster OverpassFetchError med sammendrag av siste feil.
+    Returnerer (http_status, content_type, rå tekst) eller kaster OverpassFetchError.
     """
     pc = postcode.strip().replace(" ", "")
     log.info("Overpass: endepunkter=%s", list(OVERPASS_ENDPOINTS))
@@ -236,13 +290,17 @@ def _overpass_fetch_raw(postcode: str) -> tuple[list[dict], list[str]]:
 
     raw_text = _read_overpass_cache(pc)
     from_disk = raw_text is not None
+    http_status: int | None = None
+    http_ctype: str | None = None
     if raw_text is None:
-        raw_text = _fetch_overpass_with_retries(pc)
+        http_status, http_ctype, raw_text = _fetch_overpass_with_retries(pc)
 
-    try:
-        data = json.loads(raw_text)
-    except json.JSONDecodeError as e:
-        raise OverpassFetchError(f"Overpass returnerte ugyldig JSON: {e}") from e
+    data = _parse_overpass_response_body(
+        raw_text,
+        http_status=http_status,
+        http_content_type=http_ctype,
+        context="overpass-nett" if http_status is not None else "disk-cache",
+    )
 
     remark = data.get("remark")
     if isinstance(remark, str) and remark.strip():
@@ -258,9 +316,14 @@ def _overpass_fetch_raw(postcode: str) -> tuple[list[dict], list[str]]:
 
     if len(elements) == 0 and from_disk:
         log.info("Overpass: cache for %s var tom — henter live på nytt", pc)
-        raw_text = _fetch_overpass_with_retries(pc)
+        http_status, http_ctype, raw_text = _fetch_overpass_with_retries(pc)
         from_disk = False
-        data = json.loads(raw_text)
+        data = _parse_overpass_response_body(
+            raw_text,
+            http_status=http_status,
+            http_content_type=http_ctype,
+            context="overpass-nett",
+        )
         elements = data.get("elements")
         if not isinstance(elements, list):
             warnings.append("Overpass-svar manglet elementliste — behandles som tomt.")
