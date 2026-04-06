@@ -1,7 +1,10 @@
+import os
 from pathlib import Path
 
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_default_port = os.environ.get("PORT", "8000").strip() or "8000"
 
 
 class Settings(BaseSettings):
@@ -78,7 +81,7 @@ class Settings(BaseSettings):
     gsv_scan_max_attempts_default: int = 4
     gsv_scan_max_images_per_address_default: int = 4
     # Base-URL runner bruker mot dette API-et (må nå backend fra runner-prosessen)
-    gsv_scan_runner_api_base: str = "http://127.0.0.1:8000"
+    gsv_scan_runner_api_base: str = f"http://127.0.0.1:{_default_port}"
     # Tom = bruk repo/.venv-runner/bin/python (eller Scripts\python.exe på Windows)
     gsv_scan_runner_python: str = ""
 
