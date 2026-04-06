@@ -5,6 +5,12 @@ services:
     name: streetview-scanner-api
     runtime: python
     rootDir: backend
-    buildCommand: pip install -r requirements.txt
+    # GSV-scan kjører python -m runner fra repo-rot med .venv-runner (se gsv_scan_job_runner.py).
+    buildCommand: |
+      pip install -r requirements.txt
+      cd .. && python3 -m venv .venv-runner \
+        && .venv-runner/bin/pip install -U pip \
+        && .venv-runner/bin/pip install -r runner/requirements.txt \
+        && .venv-runner/bin/python -m playwright install --with-deps chromium
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     plan: starter

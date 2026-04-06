@@ -25,10 +25,10 @@ from app.config import settings
 
 log = logging.getLogger(__name__)
 
-# Offentlige instanser (roter ved 502/503/504/429). overpass-api.de er ofte mest belastet.
+# Offentlige instanser (roter ved 502/503/504/429). kumi er ofte mindre belastet enn overpass-api.de.
 OVERPASS_ENDPOINTS: tuple[str, ...] = (
-    "https://overpass-api.de/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
+    "https://overpass-api.de/api/interpreter",
 )
 # Omtrentlig Norge (sør, vest, nord, øst) — samme som Overpass-filter
 NO_BBOX = "57.9,4.5,71.3,31.3"
@@ -36,7 +36,8 @@ NO_LAT_MIN, NO_LON_MIN, NO_LAT_MAX, NO_LON_MAX = 57.9, 4.5, 71.3, 31.3
 USER_AGENT = "AlarmskiltQC-StreetViewScanner/1.0 (overpass; internal)"
 # Kortere pause mellom POSTs — fortsatt «snill» mot Overpass; sparer mye wall-clock ved retry.
 REQUEST_PAUSE_S = float(os.environ.get("OVERPASS_REQUEST_PAUSE_S", "0.35"))
-HTTP_TIMEOUT_S = int(os.environ.get("OVERPASS_HTTP_TIMEOUT_S", "95"))
+# Må være > Overpass [timeout:N] i spørringen slik at vi får JSON med remark ved server-timeout.
+HTTP_TIMEOUT_S = int(os.environ.get("OVERPASS_HTTP_TIMEOUT_S", "140"))
 RETRY_PER_ENDPOINT = int(os.environ.get("OVERPASS_RETRY_PER_ENDPOINT", "2"))
 RETRY_BACKOFF_S = float(os.environ.get("OVERPASS_RETRY_BACKOFF_S", "1.35"))
 # Gjenbruk rå JSON per postnummer (samme prosess / flere jobber innen TTL).
@@ -180,9 +181,12 @@ def _fetch_overpass_with_retries(postcode: str) -> str:
     pc = postcode.strip().replace(" ", "")
     log.info("Overpass: endepunkter=%s", list(OVERPASS_ENDPOINTS))
     # Lett spørring først (node+way) — dekker nesten alle adresser raskere; relation er treg og sjelden nødvendig.
+    # [timeout:N] = server-side max kjøretid sek (tungt postnr + treig instans → 70s feilet ofte i prod).
+    q_light = int(os.environ.get("OVERPASS_QUERY_TIMEOUT_LIGHT_S", "85"))
+    q_full = int(os.environ.get("OVERPASS_QUERY_TIMEOUT_FULL_S", "115"))
     strategies: tuple[tuple[str, bool, int], ...] = (
-        ("light_node_way_only", False, 55),
-        ("full_node_way_relation", True, 70),
+        ("light_node_way_only", False, q_light),
+        ("full_node_way_relation", True, q_full),
     )
     errors: list[str] = []
 
