@@ -34,7 +34,8 @@ def _b(name: str, default: bool) -> bool:
     return v in ("1", "true", "yes", "on")
 
 
-API_BASE = os.environ.get("SCANNER_API_BASE", "http://127.0.0.1:8000").rstrip("/")
+_default_port = os.environ.get("PORT", "8000").strip() or "8000"
+API_BASE = os.environ.get("SCANNER_API_BASE", f"http://127.0.0.1:{_default_port}").rstrip("/")
 SCANNER_TOKEN = os.environ.get("SCANNER_API_TOKEN", "").strip()
 YOLO_MODEL_PATH = _resolve_yolo_model_path(os.environ.get("YOLO_MODEL_PATH"))
 CONF_STRONG = float(os.environ.get("YOLO_CONF_STRONG", "0.65"))
