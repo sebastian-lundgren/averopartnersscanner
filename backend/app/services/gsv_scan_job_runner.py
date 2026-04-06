@@ -26,9 +26,17 @@ def _repo_root() -> Path:
 
 
 def _default_runner_venv_python(repo: Path) -> Path:
+    # Lokalt: repo/.venv-runner. Render m/rootDir=backend: kun filer under backend/ deployes —
+    # da ligger venv i repo/backend/.venv-runner (se render.yaml).
     if platform.system() == "Windows":
-        return repo / ".venv-runner" / "Scripts" / "python.exe"
-    return repo / ".venv-runner" / "bin" / "python"
+        nested = repo / "backend" / ".venv-runner" / "Scripts" / "python.exe"
+        root = repo / ".venv-runner" / "Scripts" / "python.exe"
+    else:
+        nested = repo / "backend" / ".venv-runner" / "bin" / "python"
+        root = repo / ".venv-runner" / "bin" / "python"
+    if nested.is_file():
+        return nested
+    return root
 
 
 def _resolve_runner_python_executable(repo: Path) -> str:
