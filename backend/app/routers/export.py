@@ -63,7 +63,13 @@ def _rows(db: Session):
         te = te_map.get(p.id)
         tags = te.tags_json if te and isinstance(te.tags_json, dict) else {}
         ann = str(tags.get("annotation_label") or "") if tags else ""
-        bbox_tr = tags.get("bbox_norm") if tags else None
+        bbox_tr = None
+        if tags:
+            bm = tags.get("bboxes_norm")
+            if isinstance(bm, list) and len(bm) > 0:
+                bbox_tr = bm
+            else:
+                bbox_tr = tags.get("bbox_norm")
         bbox_tr_s = json.dumps(bbox_tr, ensure_ascii=True) if bbox_tr is not None else ""
         bbox_prop_s = json.dumps(p.bbox_json, ensure_ascii=True) if p.bbox_json else ""
         yield {

@@ -72,6 +72,17 @@ def apply_schema_patches():
     _add("predictions", "claimed_by", "ALTER TABLE predictions ADD COLUMN claimed_by VARCHAR(128)")
     _add("predictions", "claimed_at", "ALTER TABLE predictions ADD COLUMN claimed_at TIMESTAMP")
     _add("training_examples", "annotated_by", "ALTER TABLE training_examples ADD COLUMN annotated_by VARCHAR(128)")
+    _add("streetview_scan_jobs", "scan_run_id", "ALTER TABLE streetview_scan_jobs ADD COLUMN scan_run_id INTEGER")
+    _add(
+        "streetview_scan_jobs",
+        "max_images_per_address",
+        "ALTER TABLE streetview_scan_jobs ADD COLUMN max_images_per_address INTEGER DEFAULT 4",
+    )
+    _add(
+        "streetview_scan_jobs",
+        "locations_plan_json",
+        "ALTER TABLE streetview_scan_jobs ADD COLUMN locations_plan_json TEXT",
+    )
 
 
 def init_db():

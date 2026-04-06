@@ -20,7 +20,7 @@ class ScanApi:
         if config.SCANNER_TOKEN:
             self.headers["X-Scanner-Token"] = config.SCANNER_TOKEN
 
-    def bulk_locations(self, locations: list[dict]) -> None:
+    def bulk_locations(self, locations: list[dict]) -> dict:
         r = httpx.post(
             f"{self.base}/api/scanner/locations/bulk",
             json={"locations": locations},
@@ -28,12 +28,23 @@ class ScanApi:
             timeout=120.0,
         )
         r.raise_for_status()
+        d = r.json()
         log.info("Lagret %s lokasjoner", len(locations))
+        return d
 
-    def start_run(self, postcode: str, max_locations: int) -> tuple[int, list[dict]]:
+    def start_run(
+        self,
+        postcode: str,
+        max_locations: int,
+        *,
+        location_ids: list[int] | None = None,
+    ) -> tuple[int, list[dict]]:
+        body: dict = {"postcode": postcode, "max_locations": max_locations}
+        if location_ids is not None:
+            body["location_ids"] = location_ids
         r = httpx.post(
             f"{self.base}/api/scanner/runs/start",
-            json={"postcode": postcode, "max_locations": max_locations},
+            json=body,
             headers=self.headers,
             timeout=120.0,
         )
@@ -51,7 +62,7 @@ class ScanApi:
         camera_state: str,
         prediction_status: str | None,
         confidence: int | None,
-        bbox_json: dict | None,
+        bbox_json: dict | list | None,
         rationale: str | None,
     ) -> None:
         body = {
@@ -102,11 +113,12 @@ class ScanApi:
         latitude: float,
         longitude: float,
         confidence: int,
-        bbox: dict[str, float],
+        bbox: dict,
         rationale: str,
     ) -> dict:
         raw = screenshot.read_bytes()
-        files = {"file": (screenshot.name, raw, "image/jpeg")}
+        mime = "image/png" if screenshot.suffix.lower() == ".png" else "image/jpeg"
+        files = {"file": (screenshot.name, raw, mime)}
         data = {
             "scan_run_item_id": str(scan_run_item_id),
             "location_id": str(location_id),

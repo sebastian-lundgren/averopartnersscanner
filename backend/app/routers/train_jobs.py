@@ -8,6 +8,7 @@ from app.services.train_pipeline import (
     count_new_annotations_since_checkpoint,
     create_train_job,
     has_active_train_job,
+    signal_cancel_train_job,
     start_train_job_thread,
 )
 
@@ -34,12 +35,22 @@ def list_jobs(limit: int = 50, db: Session = Depends(get_db)):
     )
 
 
-@router.get("/{job_id}", response_model=schemas.TrainJobOut)
-def get_job(job_id: int, db: Session = Depends(get_db)):
-    job = db.get(models.TrainJob, job_id)
+@router.post("/cancel-active")
+def cancel_active_train(db: Session = Depends(get_db)):
+    """Stopp-signal til pågående eller nettopp startet jobb (samarbeidende avslutning ved epoch-slutt)."""
+    job = (
+        db.query(models.TrainJob)
+        .filter(
+            models.TrainJob.status.in_([models.TrainJobStatus.QUEUED, models.TrainJobStatus.RUNNING]),
+        )
+        .order_by(models.TrainJob.created_at.desc())
+        .first()
+    )
     if not job:
-        raise HTTPException(404, "Jobb ikke funnet")
-    return job
+        raise HTTPException(404, "Ingen aktiv treningsjobb")
+    if not signal_cancel_train_job(job.id):
+        raise HTTPException(503, "Kunne ikke sende stopp — prøv igjen om et øyeblikk")
+    return {"ok": True, "job_id": job.id}
 
 
 @router.post("/start", response_model=schemas.TrainJobOut)
@@ -65,4 +76,12 @@ def start_job(
     db.commit()
     db.refresh(job)
     start_train_job_thread(job.id)
+    return job
+
+
+@router.get("/{job_id}", response_model=schemas.TrainJobOut)
+def get_job(job_id: int, db: Session = Depends(get_db)):
+    job = db.get(models.TrainJob, job_id)
+    if not job:
+        raise HTTPException(404, "Jobb ikke funnet")
     return job

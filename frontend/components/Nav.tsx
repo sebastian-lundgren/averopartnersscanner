@@ -9,6 +9,7 @@ const links = [
   ["/addresses", "Adresser"],
   ["/models", "Modellversjoner"],
   ["/export", "Eksport"],
+  ["/scanner", "Street View-scan"],
   ["/settings", "Innstillinger"],
 ];
 

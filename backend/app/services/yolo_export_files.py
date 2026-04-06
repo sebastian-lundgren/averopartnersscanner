@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from sqlalchemy.orm import Session
 from app import models
 from app.services.blob_storage import is_r2_ref, materialize_local_path
 from app.services.path_resolve import resolve_stored_path
+from app.services.bbox_multi import is_valid_box, normalize_box
 from app.services.yolo_service import bbox_to_yolo_line
 
 
@@ -46,6 +48,7 @@ def write_yolo_dataset(
         tags = te.tags_json
         ann = str(tags.get("annotation_label") or "")
         bbox = tags.get("bbox_norm")
+        bboxes_multi = tags.get("bboxes_norm")
         split = ent.split
         if split not in counts:
             continue
@@ -77,21 +80,29 @@ def write_yolo_dataset(
             continue
 
         label_path = export_root / "labels" / split / f"{stem}.txt"
-        if ann == "alarm_sign" and isinstance(bbox, dict) and all(k in bbox for k in ("x", "y", "w", "h")):
-            label_path.write_text(bbox_to_yolo_line(0, bbox), encoding="utf-8")
-        else:
-            # not_alarm_sign / unclear: tom label (negativt eksempel) eller tom ved unclear
-            label_path.write_text("", encoding="utf-8")
+        lines: list[str] = []
+        if ann == "alarm_sign":
+            if isinstance(bboxes_multi, list) and bboxes_multi:
+                for b in bboxes_multi:
+                    if isinstance(b, dict) and is_valid_box(b):
+                        lines.append(bbox_to_yolo_line(0, normalize_box(b)))
+            elif isinstance(bbox, dict) and is_valid_box(bbox):
+                lines.append(bbox_to_yolo_line(0, normalize_box(bbox)))
+        label_path.write_text("".join(lines), encoding="utf-8")
         counts[split] += 1
 
-    # dataset.yaml
+    # dataset.yaml: bruk eksplisitte absolutte train/val-mapper. Ultralytics 8.x kan fortsatt
+    # slå sammen «path» + relative train/val feil (cwd), som ga …/backend/images/val.
     yaml_path = export_root / "dataset.yaml"
+    root_res = export_root.resolve()
+    train_dir = root_res / "images" / "train"
+    val_dir = root_res / "images" / "val"
     yaml_path.write_text(
         "\n".join(
             [
-                "path: .",
-                "train: images/train",
-                "val: images/val",
+                f"path: {json.dumps(str(root_res))}",
+                f"train: {json.dumps(str(train_dir))}",
+                f"val: {json.dumps(str(val_dir))}",
                 "",
                 "names:",
                 "  0: alarm_sign",

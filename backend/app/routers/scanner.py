@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from typing import Any
 from datetime import datetime
 from pathlib import Path
 
@@ -17,6 +18,12 @@ from app.config import settings
 from app.database import get_db
 from app.services.active_learning import refresh_prediction_priority
 from app.services.blob_storage import materialize_local_path, store_upload_bytes
+from app.services.bbox_multi import (
+    canonicalize_bboxes,
+    first_bbox,
+    parse_bboxes_from_pred_json,
+    yolo_trusted_primary_from_bbox_json,
+)
 from app.services.evidence import save_evidence_crop
 
 router = APIRouter(prefix="/api/scanner", tags=["scanner"])
@@ -63,18 +70,55 @@ def bulk_locations(
     return {"ok": True, "ids": created}
 
 
+def _postcode_norm(s: str) -> str:
+    return (s or "").strip().replace(" ", "")
+
+
 @router.post("/runs/start", response_model=schemas.ScanRunStartOut)
 def start_run(
     body: schemas.ScanRunStart,
     db: Session = Depends(get_db),
     _: None = Depends(_check_scanner_token),
 ):
-    q = (
-        db.query(models.TestLocation)
-        .filter(models.TestLocation.postcode == body.postcode)
-        .order_by(models.TestLocation.id.asc())
-    )
-    locs = q.limit(body.max_locations).all()
+    pc_body = _postcode_norm(body.postcode)
+    if body.location_ids is not None:
+        if not body.location_ids:
+            raise HTTPException(400, "location_ids kan ikke være tom")
+        if len(body.location_ids) > 500:
+            raise HTTPException(400, "For mange location_ids")
+        if len(set(body.location_ids)) != len(body.location_ids):
+            raise HTTPException(400, "location_ids må være unike")
+        if body.max_locations != len(body.location_ids):
+            raise HTTPException(
+                400,
+                "max_locations må være lik antall location_ids når location_ids er satt",
+            )
+        rows = (
+            db.query(models.TestLocation)
+            .filter(models.TestLocation.id.in_(body.location_ids))
+            .all()
+        )
+        by_id = {r.id: r for r in rows}
+        locs = []
+        for lid in body.location_ids:
+            row = by_id.get(lid)
+            if row is None:
+                raise HTTPException(400, f"test_location id={lid} finnes ikke")
+            if _postcode_norm(row.postcode) != pc_body:
+                raise HTTPException(
+                    400,
+                    f"Postnummer på test_location id={lid} matcher ikke start_run.postcode",
+                )
+            locs.append(row)
+    else:
+        # Fallback uten eksplisitte id-er: nyeste radene for postkoden (bulk legger alltid til nye).
+        q = (
+            db.query(models.TestLocation)
+            .filter(models.TestLocation.postcode == body.postcode)
+            .order_by(models.TestLocation.id.desc())
+            .limit(body.max_locations)
+        )
+        locs = list(reversed(q.all()))
     if not locs:
         raise HTTPException(400, "Ingen test_locations for denne postkoden")
 
@@ -180,11 +224,18 @@ async def ingest_yolo(
 ):
     """Lagre screenshot som ImageAsset + Prediction (YOLO-modellversjon) → review-kø."""
     try:
-        box = json.loads(bbox_json)
-        if not isinstance(box, dict):
-            raise ValueError("bbox_json må være objekt")
-    except (json.JSONDecodeError, ValueError) as e:
-        raise HTTPException(400, str(e)) from e
+        raw = json.loads(bbox_json)
+    except json.JSONDecodeError as e:
+        raise HTTPException(400, f"bbox_json er ikke gyldig JSON: {e}") from e
+    parsed = parse_bboxes_from_pred_json(raw)
+    yolo_meta: dict[str, Any] = {}
+    if isinstance(raw, dict):
+        if "yolo_trusted_primary" in raw:
+            yolo_meta["yolo_trusted_primary"] = bool(raw["yolo_trusted_primary"])
+        gr = raw.get("yolo_primary_gate_reason")
+        if isinstance(gr, str):
+            yolo_meta["yolo_primary_gate_reason"] = gr[:500]
+    box = canonicalize_bboxes(parsed, yolo_meta=yolo_meta if yolo_meta else None) if parsed else None
 
     content = await file.read()
     safe = Path(file.filename or "scan.jpg").name
@@ -209,10 +260,13 @@ async def ingest_yolo(
 
     addr = None
     if address_line or postcode:
+        note_parts: list[str] = []
+        if latitude is not None:
+            note_parts.append(f"scan lat={latitude} lon={longitude}")
         addr = models.AddressRecord(
             address_line=address_line,
             customer_id=postcode,
-            notes=f"scan lat={latitude} lon={longitude}" if latitude is not None else None,
+            notes=" | ".join(note_parts) if note_parts else None,
         )
         db.add(addr)
         db.flush()
@@ -231,9 +285,10 @@ async def ingest_yolo(
     db.flush()
 
     ev_rel = None
-    if box.get("w", 0) and box.get("h", 0):
+    fb = first_bbox(box)
+    if fb and yolo_trusted_primary_from_bbox_json(box):
         ev_name = f"ev_scan_{img.id}_{uuid.uuid4().hex[:6]}.jpg"
-        ev_rel = save_evidence_crop(stored_path, ev_name, box)
+        ev_rel = save_evidence_crop(stored_path, ev_name, fb)
         if ev_rel:
             img.evidence_crop_path = ev_rel
 

@@ -47,6 +47,9 @@ class Settings(BaseSettings):
     yolo_model_path: Path = Path("./data/models/yolov8s.pt")
     yolo_confidence_strong: float = 0.65
     yolo_confidence_weak: float = 0.35
+    # Under disse: lagre alle bbox-forslag, men ikke behandle rangert primær som pålitelig (evidens/review).
+    yolo_primary_trust_min_conf: float = 0.45
+    yolo_primary_trust_min_composite: float = 0.30
     yolo_dataset_export_dir: Path = Path("./data/yolo_dataset")
     yolo_train_output_dir: Path = Path("./data/yolo_runs")
     # YOLO auto-treningssløyfe (ultralytics)
@@ -58,7 +61,7 @@ class Settings(BaseSettings):
     yolo_train_min_train_images: int = 5
     yolo_train_min_val_images: int = 2
     yolo_train_trigger_min_new_annotations: int = 25
-    yolo_train_auto_enabled: bool = True
+    yolo_train_auto_enabled: bool = False
     # Sammenligning for auto-aktivering (metric: map50_95 | map50 | precision | recall)
     yolo_activation_metric: str = "map50_95"
     yolo_activation_min_delta: float = 0.0
@@ -67,6 +70,17 @@ class Settings(BaseSettings):
     ml_inference_enabled: bool = True
     # Street View scan-runner (Playwright) kaller API
     scanner_api_token: str = ""
+    # Web-MVP: start av runner som subprocess (python -m runner), stier relativt repo-rot
+    # Statisk fallback når use_dynamic_locations=false. Dynamisk modus bruker OSM Overpass (se gsv_location_fetch).
+    gsv_scan_locations_path: str = "runner/data/example_locations.json"
+    gsv_scan_default_postcode: str = "0154"
+    gsv_scan_max_locations_default: int = 5
+    gsv_scan_max_attempts_default: int = 4
+    gsv_scan_max_images_per_address_default: int = 4
+    # Base-URL runner bruker mot dette API-et (må nå backend fra runner-prosessen)
+    gsv_scan_runner_api_base: str = "http://127.0.0.1:8000"
+    # Tom = bruk repo/.venv-runner/bin/python (eller Scripts\python.exe på Windows)
+    gsv_scan_runner_python: str = ""
 
     @property
     def cors_origins_list(self) -> list[str]:

@@ -258,6 +258,7 @@ class TrainJobStatus:
     RUNNING = "running"
     FINISHED = "finished"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 class TrainJob(Base):
@@ -278,6 +279,35 @@ class TrainJob(Base):
         Integer, ForeignKey("model_versions.id"), nullable=True
     )
     activated_new_model: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class StreetViewScanJobStatus:
+    QUEUED = "queued"
+    RUNNING = "running"
+    DONE = "done"
+    FAILED = "failed"
+
+
+class StreetViewScanJob(Base):
+    """Kø for Google Street View-scan via ekstern runner (Playwright), ikke i HTTP-tråden."""
+
+    __tablename__ = "streetview_scan_jobs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default=StreetViewScanJobStatus.QUEUED, index=True
+    )
+    postcode: Mapped[str] = mapped_column(String(16), nullable=False)
+    max_locations: Mapped[int] = mapped_column(Integer, default=10)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=4)
+    max_images_per_address: Mapped[int] = mapped_column(Integer, default=4)
+    locations_json_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    scan_run_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("scan_runs.id"), nullable=True, index=True)
+    locations_plan_json: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class AppSetting(Base):

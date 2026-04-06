@@ -5,19 +5,25 @@ YOLOv8s inferens for API og verktøy. Ultralytics er valgfritt; manglende modell
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from app.config import settings
 from app.models import ReviewStatus
+from app.services.bbox_multi import canonicalize_bboxes
+from app.services.yolo_bbox_rank import reorder_scored_for_storage
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
 class YoloInferenceOutput:
     predicted_status: str
-    confidence: int  # 0–100
-    bbox_json: dict[str, float] | None  # x,y,w,h normalisert 0–1 (topleft)
+    confidence: int  # 0–100 (beste kandidat)
+    # Kanonisk multi: {"boxes": [{x,y,w,h}, ...], "v": 2} eller None
+    bbox_json: dict[str, Any] | None
     rationale: str
     needs_review: bool
     raw_detections: list[dict[str, Any]]
@@ -94,6 +100,7 @@ def run_yolov8_on_image(
         )
 
     if not results or results[0].boxes is None or len(results[0].boxes) == 0:
+        log.info("YOLO inferens %s: 0 kandidater (under predict-conf)", path.name)
         return YoloInferenceOutput(
             predicted_status=ReviewStatus.UKLART.value,
             confidence=0,
@@ -106,30 +113,59 @@ def run_yolov8_on_image(
     r0 = results[0]
     ih, iw = r0.orig_shape[:2]
     boxes = r0.boxes
-    best_i = int(boxes.conf.argmax().item()) if len(boxes) > 1 else 0
-    conf_f = float(boxes.conf[best_i].item())
-    xyxy = boxes.xyxy[best_i].tolist()
-    x1, y1, x2, y2 = xyxy[0], xyxy[1], xyxy[2], xyxy[3]
-    bbox = _bbox_xywh_norm_from_xyxy(x1, y1, x2, y2, iw, ih)
-    conf_pct = int(round(max(0, min(100, conf_f * 100))))
-
     raw: list[dict[str, Any]] = []
+    scored: list[tuple[float, dict[str, float]]] = []
     for i in range(len(boxes)):
+        cf = float(boxes.conf[i].item())
         b = boxes.xyxy[i].tolist()
         raw.append(
             {
-                "conf": float(boxes.conf[i].item()),
+                "conf": cf,
                 "xyxy": b,
                 "cls": int(boxes.cls[i].item()) if boxes.cls is not None else 0,
             }
+        )
+        x1, y1, x2, y2 = b[0], b[1], b[2], b[3]
+        scored.append((cf, _bbox_xywh_norm_from_xyxy(x1, y1, x2, y2, iw, ih)))
+    bboxes_norm, conf_f, trust = reorder_scored_for_storage(
+        scored,
+        context="api",
+        image_label=path.name,
+        trust_min_conf=settings.yolo_primary_trust_min_conf,
+        trust_min_composite=settings.yolo_primary_trust_min_composite,
+    )
+    yolo_meta = {
+        "yolo_trusted_primary": trust["trusted_primary"],
+        "yolo_primary_gate_reason": str(trust["primary_gate_reason"])[:500],
+    }
+    canonical = canonicalize_bboxes(bboxes_norm, yolo_meta=yolo_meta)
+    conf_pct = int(round(max(0, min(100, conf_f * 100))))
+    n = len(bboxes_norm)
+    log.info(
+        "YOLO inferens %s: %s kandidat(er) etter rangering (primær rå conf=%.3f trusted_primary=%s), lagrer multi-bbox=%s",
+        path.name,
+        n,
+        conf_f,
+        trust["trusted_primary"],
+        canonical is not None,
+    )
+
+    trust_note = ""
+    if not trust["trusted_primary"]:
+        trust_note = (
+            f" Usikre modellforslag — ingen pålitelig auto-primær ({trust['primary_gate_reason']}). "
+            "Alle bokser er kun forslag; velg manuelt i review."
         )
 
     if conf_f >= hi:
         return YoloInferenceOutput(
             predicted_status=ReviewStatus.UKLART.value,
             confidence=conf_pct,
-            bbox_json=bbox,
-            rationale=f"YOLOv8s: alarm_sign kandidat conf={conf_f:.2f} (sterk) — krever manuell bekreftelse i review.",
+            bbox_json=canonical,
+            rationale=(
+                f"YOLOv8s: {n} alarm_sign-kandidat(er), beste conf={conf_f:.2f} (sterk) — manuell QA i review."
+                + trust_note
+            ),
             needs_review=True,
             raw_detections=raw,
         )
@@ -137,8 +173,8 @@ def run_yolov8_on_image(
         return YoloInferenceOutput(
             predicted_status=ReviewStatus.UKLART.value,
             confidence=conf_pct,
-            bbox_json=bbox,
-            rationale=f"YOLOv8s: svak alarm_sign kandidat conf={conf_f:.2f} — review anbefalt.",
+            bbox_json=canonical,
+            rationale=f"YOLOv8s: {n} kandidat(er), beste conf={conf_f:.2f} (svak) — review anbefalt." + trust_note,
             needs_review=True,
             raw_detections=raw,
         )
@@ -146,8 +182,9 @@ def run_yolov8_on_image(
     return YoloInferenceOutput(
         predicted_status=ReviewStatus.UKLART.value,
         confidence=conf_pct,
-        bbox_json=bbox,
-        rationale=f"YOLOv8s: svært lav conf={conf_f:.2f} — terskel ikke nådd for sikker lagring.",
+        bbox_json=canonical,
+        rationale=f"YOLOv8s: {n} kandidat(er), beste conf={conf_f:.2f} — under svak terskel, fortsatt bbox-forslag."
+        + trust_note,
         needs_review=True,
         raw_detections=raw,
     )

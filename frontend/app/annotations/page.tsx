@@ -11,8 +11,9 @@ type Row = {
   filename: string;
   original_model_status: string | null;
   model_predicted_status: string | null;
-  model_bbox: Record<string, number> | null;
+  model_bbox: unknown;
   manual_bbox: Record<string, number> | null;
+  manual_bboxes?: Record<string, number>[] | null;
   training_label: string | null;
   final_status: string;
   error_type: string | null;
@@ -28,15 +29,25 @@ type Overview = {
   total: number;
 };
 
-function fmtBbox(b: Record<string, number> | null) {
-  if (!b || typeof b.x !== "number") return "—";
-  return `${b.x.toFixed(3)},${b.y.toFixed(3)} ${b.w?.toFixed(3) ?? "?"}×${b.h?.toFixed(3) ?? "?"}`;
+function fmtBbox(b: unknown) {
+  if (b != null && typeof b === "object" && "boxes" in b && Array.isArray((b as { boxes: unknown[] }).boxes)) {
+    const n = (b as { boxes: unknown[] }).boxes.length;
+    return n > 0 ? `${n} bokser` : "—";
+  }
+  if (!b || typeof b !== "object") return "—";
+  const o = b as Record<string, number>;
+  if (typeof o.x !== "number") return "—";
+  return `${o.x.toFixed(3)},${o.y.toFixed(3)} ${o.w?.toFixed(3) ?? "?"}×${o.h?.toFixed(3) ?? "?"}`;
 }
 
 function previewForRow(r: Row): {
   bbox: ReturnType<typeof parseBbox>;
   source: "manual" | "model" | "none";
 } {
+  if (Array.isArray(r.manual_bboxes) && r.manual_bboxes.length > 0) {
+    const first = parseBbox(r.manual_bboxes[0] as Record<string, number>);
+    if (first) return { bbox: first, source: "manual" };
+  }
   const manual = parseBbox(r.manual_bbox);
   if (manual) return { bbox: manual, source: "manual" };
   const model = parseBbox(r.model_bbox);
@@ -162,8 +173,10 @@ export default function AnnotationsPage() {
                 <td style={{ padding: "0.35rem", fontFamily: "monospace", maxWidth: 140 }}>
                   {fmtBbox(r.model_bbox)}
                 </td>
-                <td style={{ padding: "0.35rem", fontFamily: "monospace", maxWidth: 140 }}>
-                  {fmtBbox(r.manual_bbox)}
+                <td style={{ padding: "0.35rem", fontFamily: "monospace", maxWidth: 220, fontSize: 11 }}>
+                  {Array.isArray(r.manual_bboxes) && r.manual_bboxes.length > 0
+                    ? `${r.manual_bboxes.length} stk: ${JSON.stringify(r.manual_bboxes)}`
+                    : fmtBbox(r.manual_bbox)}
                 </td>
                 <td style={{ padding: "0.35rem" }}>{r.training_label ?? "—"}</td>
                 <td style={{ padding: "0.35rem" }}>{r.error_type ?? "—"}</td>

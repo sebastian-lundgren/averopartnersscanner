@@ -17,6 +17,9 @@ from app.models import TrainJobStatus
 from app.services import settings_store
 from app.services.yolo_export_files import write_yolo_dataset
 
+_cancel_lock = threading.Lock()
+_cancel_events: dict[int, threading.Event] = {}
+
 METRIC_KEY_ALIASES = {
     "map50_95": "mAP50-95",
     "map50": "mAP50",
@@ -104,9 +107,35 @@ def should_activate_new_model(db: Session, new_metrics: dict) -> bool:
     return new_v >= old_v + float(settings.yolo_activation_min_delta)
 
 
+def _train_cancel_requested(job_id: int) -> bool:
+    with _cancel_lock:
+        ev = _cancel_events.get(job_id)
+        return bool(ev and ev.is_set())
+
+
+def signal_cancel_train_job(job_id: int) -> bool:
+    with _cancel_lock:
+        ev = _cancel_events.get(job_id)
+        if ev is None:
+            return False
+        ev.set()
+        return True
+
+
 def start_train_job_thread(job_id: int) -> None:
+    with _cancel_lock:
+        _cancel_events[job_id] = threading.Event()
     t = threading.Thread(target=run_train_job_sync, args=(job_id,), daemon=True)
     t.start()
+
+
+def _finalize_cancelled(db: Session, job_id: int) -> None:
+    job = db.get(models.TrainJob, job_id)
+    if job and job.status == TrainJobStatus.RUNNING:
+        job.status = TrainJobStatus.CANCELLED
+        job.finished_at = datetime.utcnow()
+        job.error_message = "Avbrutt av bruker"
+        db.commit()
 
 
 def run_train_job_sync(job_id: int) -> None:
@@ -120,11 +149,19 @@ def run_train_job_sync(job_id: int) -> None:
         job.error_message = None
         db.commit()
 
+        if _train_cancel_requested(job_id):
+            _finalize_cancelled(db, job_id)
+            return
+
         root = Path(settings.yolo_dataset_export_dir)
         root.mkdir(parents=True, exist_ok=True)
         counts = write_yolo_dataset(db, root, clear_first=True)
         job.export_counts_json = dict(counts)
         db.commit()
+
+        if _train_cancel_requested(job_id):
+            _finalize_cancelled(db, job_id)
+            return
 
         train_n = int(counts.get("train", 0))
         val_n = int(counts.get("val", 0))
@@ -150,6 +187,12 @@ def run_train_job_sync(job_id: int) -> None:
         run_name = f"job_{job.id}_{uuid.uuid4().hex[:8]}"
 
         model = YOLO(base)
+
+        def on_train_epoch_end(trainer):
+            if _train_cancel_requested(job_id):
+                trainer.stop = True
+
+        model.add_callback("on_train_epoch_end", on_train_epoch_end)
         train_kw: dict = {
             "data": str(yaml.resolve()),
             "epochs": int(cfg.get("epochs", settings.yolo_train_epochs)),
@@ -165,8 +208,15 @@ def run_train_job_sync(job_id: int) -> None:
 
         model.train(**train_kw)
 
+        if _train_cancel_requested(job_id):
+            _finalize_cancelled(db, job_id)
+            return
+
         best = Path(project) / run_name / "weights" / "best.pt"
         if not best.is_file():
+            if _train_cancel_requested(job_id):
+                _finalize_cancelled(db, job_id)
+                return
             raise RuntimeError(f"Fant ikke best.pt under {best}")
 
         val_model = YOLO(str(best))
@@ -205,7 +255,10 @@ def run_train_job_sync(job_id: int) -> None:
     except Exception as e:
         try:
             job = db.get(models.TrainJob, job_id)
-            if job:
+            if job and job.status not in (
+                TrainJobStatus.CANCELLED,
+                TrainJobStatus.FINISHED,
+            ):
                 job.status = TrainJobStatus.FAILED
                 job.finished_at = datetime.utcnow()
                 job.error_message = str(e)[:8000]
@@ -213,6 +266,8 @@ def run_train_job_sync(job_id: int) -> None:
         except Exception:
             db.rollback()
     finally:
+        with _cancel_lock:
+            _cancel_events.pop(job_id, None)
         db.close()
 
 

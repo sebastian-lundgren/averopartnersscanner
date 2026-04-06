@@ -1,9 +1,10 @@
-import threading
+import logging
 import uuid
 from io import BytesIO
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from PIL import Image
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app import models, schemas
@@ -11,19 +12,28 @@ from app.config import settings
 from app.database import SessionLocal, get_db
 from app.services.active_learning import refresh_prediction_priority
 from app.services.blob_storage import materialize_local_path, store_upload_bytes
+from app.services.bbox_multi import first_bbox, yolo_trusted_primary_from_bbox_json
 from app.services.evidence import save_evidence_crop
 from app.services.settings_store import get_thresholds
+from app.services.yolo_service import run_yolov8_on_image
 
 router = APIRouter(prefix="/api/images", tags=["images"])
+log = logging.getLogger(__name__)
+
+
+def _yolo_scan_model_version(db: Session) -> models.ModelVersion | None:
+    """Samme merkelapp som scanner/ingest-yolo — konsistent bbox-kilde i review."""
+    return db.query(models.ModelVersion).filter_by(version_tag="yolov8s-scan").first()
 
 
 def _run_predictions_after_upload(image_ids: list[int]) -> None:
     """Etter opplasting: ML-prediksjon eller plassholder uten torch/HF når ml_inference_enabled=false."""
     db = SessionLocal()
     try:
-        model = db.query(models.ModelVersion).filter(models.ModelVersion.is_active.is_(True)).first()
-        if not model:
+        active_mv = db.query(models.ModelVersion).filter(models.ModelVersion.is_active.is_(True)).first()
+        if not active_mv:
             return
+        yolo_mv = _yolo_scan_model_version(db)
         thr = get_thresholds(db)
         strong = int(thr["threshold_strong_sign"])
         for iid in image_ids:
@@ -36,7 +46,7 @@ def _run_predictions_after_upload(image_ids: list[int]) -> None:
                 if not settings.ml_inference_enabled:
                     pred = models.Prediction(
                         image_id=img.id,
-                        model_version_id=model.id,
+                        model_version_id=active_mv.id,
                         predicted_status=models.ReviewStatus.UKLART.value,
                         confidence=0,
                         bbox_json=None,
@@ -53,32 +63,32 @@ def _run_predictions_after_upload(image_ids: list[int]) -> None:
                     db.commit()
                     continue
 
-                from app.services.prediction import run_heuristic_predict
-
+                pred_mv = yolo_mv or active_mv
                 local_img, tmp_del = materialize_local_path(img.stored_path, suffix=".upload")
                 try:
-                    pred_result = run_heuristic_predict(str(local_img))
+                    yo = run_yolov8_on_image(str(local_img), db_session=db)
                 finally:
                     if tmp_del:
                         local_img.unlink(missing_ok=True)
 
-                if pred_result.bbox_norm:
+                fb = first_bbox(yo.bbox_json)
+                if fb and yolo_trusted_primary_from_bbox_json(yo.bbox_json):
                     ev_name = f"ev_{img.id}_{uuid.uuid4().hex[:8]}.jpg"
-                    evidence_rel = save_evidence_crop(img.stored_path, ev_name, pred_result.bbox_norm)
+                    evidence_rel = save_evidence_crop(img.stored_path, ev_name, fb)
                     if evidence_rel:
                         img.evidence_crop_path = evidence_rel
 
-                needs_review = (
-                    pred_result.confidence < strong
-                    or pred_result.status != models.ReviewStatus.SKILT_FUNNET
+                needs_review = yo.needs_review or (
+                    yo.confidence < strong
+                    or yo.predicted_status != models.ReviewStatus.SKILT_FUNNET.value
                 )
                 pred = models.Prediction(
                     image_id=img.id,
-                    model_version_id=model.id,
-                    predicted_status=pred_result.status.value,
-                    confidence=pred_result.confidence,
-                    bbox_json=pred_result.bbox_norm,
-                    rationale=pred_result.rationale,
+                    model_version_id=pred_mv.id,
+                    predicted_status=yo.predicted_status,
+                    confidence=yo.confidence,
+                    bbox_json=yo.bbox_json,
+                    rationale=yo.rationale,
                     needs_review=needs_review,
                     review_completed=False,
                 )
@@ -87,14 +97,10 @@ def _run_predictions_after_upload(image_ids: list[int]) -> None:
                 refresh_prediction_priority(db, pred)
                 db.commit()
             except Exception:
+                log.exception("Prediksjon etter opplasting feilet for image_id=%s", iid)
                 db.rollback()
     finally:
         db.close()
-
-
-def _start_prediction_worker(image_ids: list[int]) -> None:
-    ids = list(image_ids)
-    threading.Thread(target=_run_predictions_after_upload, args=(ids,), daemon=True).start()
 
 
 def _active_model(db: Session) -> models.ModelVersion:
@@ -167,14 +173,81 @@ async def upload_images(
 
     db.commit()
     if pending_prediction_ids:
-        _start_prediction_worker(pending_prediction_ids)
+        _run_predictions_after_upload(pending_prediction_ids)
     return {"ok": True, "items": created, "address_id": address.id if address else None}
 
 
-@router.get("/library", response_model=list[schemas.ImageAssetOut])
-def library(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    q = db.query(models.ImageAsset).order_by(models.ImageAsset.uploaded_at.desc())
-    return q.offset(skip).limit(limit).all()
+@router.get("/library", response_model=list[schemas.LibraryImageOut])
+def library(
+    skip: int = 0,
+    limit: int = 100,
+    home_status: str | None = Query(
+        None,
+        description="Filtrer etter lagret boligstatus (AddressRecord.final_human_status).",
+    ),
+    db: Session = Depends(get_db),
+):
+    hs = (home_status or "all").strip().lower()
+    if hs not in ("all", "skilt_funnet", "trenger_manuell", "uklart"):
+        raise HTTPException(
+            400,
+            "home_status må være all, skilt_funnet, trenger_manuell eller uklart",
+        )
+    lib_seq = (
+        func.row_number()
+        .over(
+            partition_by=func.coalesce(
+                models.ImageAsset.address_id,
+                -models.ImageAsset.id,
+            ),
+            order_by=models.ImageAsset.uploaded_at.asc(),
+        )
+        .label("lib_seq")
+    )
+    q = (
+        db.query(models.ImageAsset, models.AddressRecord, lib_seq)
+        .outerjoin(
+            models.AddressRecord,
+            models.ImageAsset.address_id == models.AddressRecord.id,
+        )
+    )
+    if hs == "skilt_funnet":
+        q = q.filter(
+            models.ImageAsset.address_id.isnot(None),
+            models.AddressRecord.final_human_status == models.ReviewStatus.SKILT_FUNNET.value,
+        )
+    elif hs == "trenger_manuell":
+        q = q.filter(
+            models.ImageAsset.address_id.isnot(None),
+            models.AddressRecord.final_human_status == models.ReviewStatus.TRENGER_MANUELL.value,
+        )
+    elif hs == "uklart":
+        q = q.filter(
+            models.ImageAsset.address_id.isnot(None),
+            or_(
+                models.AddressRecord.final_human_status == models.ReviewStatus.UKLART.value,
+                models.AddressRecord.final_human_status.is_(None),
+            ),
+        )
+    q = q.order_by(models.ImageAsset.uploaded_at.desc())
+    rows = q.offset(skip).limit(limit).all()
+    out: list[schemas.LibraryImageOut] = []
+    for img, addr, seq in rows:
+        base = schemas.ImageAssetOut.model_validate(img).model_dump()
+        line = addr.address_line if addr else None
+        st = addr.final_human_status if addr else None
+        n = int(seq)
+        display_name = f"{line or 'Uten adresse'} #{n}"
+        base.update(
+            {
+                "address_line": line,
+                "address_final_status": st,
+                "sequence_within_address": n,
+                "display_name": display_name,
+            },
+        )
+        out.append(schemas.LibraryImageOut(**base))
+    return out
 
 
 @router.get("/{image_id}", response_model=schemas.ImageAssetOut)

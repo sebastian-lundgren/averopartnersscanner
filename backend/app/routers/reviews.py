@@ -7,8 +7,25 @@ from sqlalchemy.orm import Session, joinedload
 from app import models, schemas
 from app.config import settings
 from app.database import get_db
+from app.services.bbox_multi import (
+    is_valid_box,
+    normalize_box,
+    parse_bboxes_from_pred_json,
+)
 
 router = APIRouter(prefix="/api/reviews", tags=["reviews"])
+
+
+def _training_bbox_list(body: schemas.ReviewSubmit, pred: models.Prediction) -> list[dict[str, float]]:
+    if body.annotation_bboxes_json is not None:
+        return [
+            normalize_box(b)
+            for b in body.annotation_bboxes_json
+            if isinstance(b, dict) and is_valid_box(b)
+        ]
+    if body.annotation_bbox_json is not None and is_valid_box(body.annotation_bbox_json):
+        return [normalize_box(body.annotation_bbox_json)]
+    return parse_bboxes_from_pred_json(pred.bbox_json)
 
 _ANNOTATION_TO_STATUS: dict[str, str] = {
     "alarm_sign": models.ReviewStatus.SKILT_FUNNET.value,
@@ -78,9 +95,15 @@ def queue_stats(db: Session = Depends(get_db)):
 def review_queue(
     limit: int = 50,
     annotator_id: str | None = None,
+    image_ids: str | None = None,
     db: Session = Depends(get_db),
 ):
-    preds = (
+    id_filter: list[int] | None = None
+    if image_ids and image_ids.strip():
+        id_filter = [int(x.strip()) for x in image_ids.split(",") if x.strip().isdigit()]
+        if not id_filter:
+            id_filter = None
+    q = (
         db.query(models.Prediction)
         .options(
             joinedload(models.Prediction.image),
@@ -91,10 +114,10 @@ def review_queue(
             models.Prediction.review_completed.is_(False),
             _visible_claim_clause(annotator_id),
         )
-        .order_by(models.Prediction.priority_score.desc(), models.Prediction.created_at.asc())
-        .limit(limit)
-        .all()
     )
+    if id_filter is not None:
+        q = q.filter(models.Prediction.image_id.in_(id_filter))
+    preds = q.order_by(models.Prediction.priority_score.desc(), models.Prediction.created_at.asc()).limit(limit).all()
     out: list[schemas.QueueItemOut] = []
     for p in preds:
         out.append(
@@ -202,7 +225,8 @@ def submit_review(
     img = pred.image
     mv = pred.model_version
 
-    bbox_training = body.annotation_bbox_json if body.annotation_bbox_json is not None else pred.bbox_json
+    b_list = _training_bbox_list(body, pred)
+    bbox_training_legacy = b_list[0] if b_list else None
     annotator = (body.annotator_id or x_annotator_id or "").strip() or None
     te = models.TrainingExample(
         image_id=img.id,
@@ -217,8 +241,9 @@ def submit_review(
         annotated_by=annotator,
         tags_json={
             "annotation_label": ann_label,
-            "bbox_norm": bbox_training,
-            "format": "yolo_xywh_norm_topleft",
+            "bboxes_norm": b_list,
+            "bbox_norm": bbox_training_legacy,
+            "format": "yolo_xywh_norm_topleft_multi",
         },
     )
     db.add(te)

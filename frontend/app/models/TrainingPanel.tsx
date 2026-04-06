@@ -82,19 +82,62 @@ export default function TrainingPanel({ versions }: { versions: Mv[] }) {
     }
   };
 
+  const stopTrain = async () => {
+    setLoading(true);
+    setMsg("");
+    try {
+      const r = await fetch(`${API_BASE}/api/train-jobs/cancel-active`, { method: "POST" });
+      const raw = await r.json();
+      if (!r.ok) throw new Error(typeof raw?.detail === "string" ? raw.detail : JSON.stringify(raw));
+      setMsg(`Stopp sendt for jobb #${(raw as { job_id: number }).job_id}`);
+      await refresh();
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : "Feil");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const activeJob = jobs.find((j) => j.status === "running" || j.status === "queued");
+  const trainingBusy = Boolean(auto?.train_job_busy || activeJob);
+
   return (
     <div className="card" style={{ marginBottom: "1rem" }}>
       <h2 style={{ marginTop: 0 }}>YOLO-trening</h2>
+      <p style={{ fontSize: 15, marginTop: 0 }}>
+        {trainingBusy ? (
+          <>
+            <strong style={{ color: "var(--accent, #0a0)" }}>Trening pågår</strong>
+            {activeJob ? (
+              <>
+                {" "}
+                — jobb #{activeJob.id} ({activeJob.status})
+              </>
+            ) : null}
+          </>
+        ) : (
+          <span className="muted">
+            <strong>Ingen trening pågår</strong>
+          </span>
+        )}
+      </p>
       {auto && (
         <p className="muted" style={{ fontSize: 14 }}>
           Auto-trening: {auto.auto_enabled ? "på" : "av"} · nye annoteringer siden siste vellykkede jobb:{" "}
           <strong>{auto.new_annotations_since_checkpoint}</strong> / terskel {auto.trigger_threshold}
-          {auto.train_job_busy ? " · jobb pågår" : ""}
         </p>
       )}
       <p>
-        <button type="button" disabled={loading} onClick={() => void startTrain()}>
+        <button type="button" disabled={loading || trainingBusy} onClick={() => void startTrain()}>
           Train new YOLO model
+        </button>{" "}
+        <button
+          type="button"
+          className="secondary"
+          disabled={loading || !trainingBusy}
+          onClick={() => void stopTrain()}
+        >
+          Stopp trening
         </button>{" "}
         <button type="button" className="secondary" onClick={() => void refresh()}>
           Oppdater status

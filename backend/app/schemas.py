@@ -35,13 +35,23 @@ class ImageAssetOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class LibraryImageOut(ImageAssetOut):
+    """Bibliotek-liste: tilknyttet adresse, rekkefølgenummer og visningsnavn (ikke filnavn)."""
+
+    address_line: str | None = None
+    address_final_status: str | None = None
+    sequence_within_address: int
+    display_name: str
+
+
 class PredictionOut(BaseModel):
     id: int
     image_id: int
     model_version_id: int
     predicted_status: str
     confidence: int
-    bbox_json: dict | None
+    # Én bbox (legacy), liste, eller {"boxes":[...],"v":2}
+    bbox_json: Any | None
     rationale: str | None
     needs_review: bool
     priority_score: float
@@ -102,6 +112,8 @@ class ReviewSubmit(BaseModel):
     )
     # Normalisert bbox {x,y,w,h} 0–1 for treningsdata; default er modellens forslag.
     annotation_bbox_json: dict[str, float] | None = None
+    # Flere skilt i samme bilde — overstyrer enkelt-bbox når satt.
+    annotation_bboxes_json: list[dict[str, float]] | None = Field(None, max_length=48)
     # YOLO datasett-split ved lagring av treningsrad (train/val/rejected).
     yolo_dataset_split: str | None = Field(None, pattern="^(train|val|rejected)$")
     comment: str | None = None
@@ -124,6 +136,8 @@ class ScannerLocationBulk(BaseModel):
 class ScanRunStart(BaseModel):
     postcode: str
     max_locations: int = 50
+    # Når satt: bruk eksakt disse test_locations-radene i denne rekkefølgen (fra bulk_locations-respons).
+    location_ids: list[int] | None = None
 
 
 class ScanRunStartOut(BaseModel):
@@ -137,7 +151,7 @@ class ScanAttemptIn(BaseModel):
     camera_state: str | None = None
     prediction_status: str | None = None
     confidence: int | None = None
-    bbox_json: dict | None = None
+    bbox_json: Any | None = None
     rationale: str | None = None
 
 
@@ -162,6 +176,74 @@ class TrainJobStartBody(BaseModel):
     imgsz: int | None = None
     batch: int | None = None
     device: str | None = None
+
+
+class StreetViewScanJobStartBody(BaseModel):
+    postcode: str | None = None
+    max_locations: int | None = Field(default=None, ge=1, le=500)
+    max_attempts: int | None = Field(default=None, ge=1, le=20)
+    max_images_per_address: int | None = Field(default=None, ge=1, le=20)
+    locations_json_path: str | None = None
+    # True (standard): hent gate+husnr. via OSM Overpass før runner. False: bruk JSON-fil.
+    use_dynamic_locations: bool = True
+
+
+class ScanJobLocationPlanRow(BaseModel):
+    order: int
+    address: str
+    postcode: str
+    latitude: float
+    longitude: float
+
+
+class ScanJobLocationsPlan(BaseModel):
+    source: str = "overpass"
+    postcode: str
+    unique_address_count: int
+    planned_count: int
+    truncated_to_max_locations: bool
+    warnings: list[str] = Field(default_factory=list)
+    rows: list[ScanJobLocationPlanRow] = Field(default_factory=list)
+
+
+class ScanJobAddressOutcome(BaseModel):
+    order: int
+    location_id: int
+    address: str
+    final_result: str | None = None
+    notes: str | None = None
+    images_saved: int = 0
+
+
+class StreetViewScanJobResultSummary(BaseModel):
+    scan_run_id: int
+    run_status: str
+    total_locations: int
+    completed_locations: int
+    locations_with_detection: int
+    images_saved: int
+    image_ids: list[int]
+    predictions_pending_review: int
+    address_outcomes: list[ScanJobAddressOutcome] = Field(default_factory=list)
+
+
+class StreetViewScanJobOut(BaseModel):
+    id: int
+    status: str
+    postcode: str
+    max_locations: int
+    max_attempts: int
+    max_images_per_address: int
+    locations_json_path: str
+    created_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+    error_message: str | None
+    scan_run_id: int | None = None
+    result_summary: StreetViewScanJobResultSummary | None = None
+    locations_plan: ScanJobLocationsPlan | None = None
+
+    model_config = {"from_attributes": True}
 
 
 class TrainJobOut(BaseModel):

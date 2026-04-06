@@ -27,4 +27,7 @@ runner/data/generated/
 
 # Build / cache
 *.tsbuildinfo
+
 .DS_Store
+backend/yolov8s.pt
+runs/

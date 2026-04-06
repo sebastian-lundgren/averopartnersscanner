@@ -1,9 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import ReviewBboxEditor from "@/components/ReviewBboxEditor";
 import type { BboxNorm } from "@/components/ReviewBboxEditor";
 import { API_BASE, fileUrl } from "@/lib/api";
+import { parsePredBboxes, parseYoloTrustMeta, yoloSuggestionsUncertain } from "@/lib/predBboxes";
 import {
   ANNOTATION_LABELS,
   AnnotationLabel,
@@ -17,7 +19,7 @@ type Pred = {
   predicted_status: string;
   confidence: number;
   rationale: string | null;
-  bbox_json: BboxNorm | null;
+  bbox_json: unknown;
   claimed_by?: string | null;
   claimed_at?: string | null;
 };
@@ -26,7 +28,10 @@ type QueueItem = { prediction: Pred; image: Img };
 
 const ANNOTATOR_LS = "annotator_display_name";
 
-export default function ReviewPage() {
+function ReviewPageInner() {
+  const searchParams = useSearchParams();
+  const imageIdsFilter = (searchParams.get("image_ids") || "").trim();
+
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [idx, setIdx] = useState(0);
   const [annotationLabel, setAnnotationLabel] = useState<AnnotationLabel>("unclear");
@@ -34,7 +39,10 @@ export default function ReviewPage() {
   const [errorType, setErrorType] = useState("");
   const [msg, setMsg] = useState("");
   const [loading, setLoading] = useState(false);
-  const [manualBbox, setManualBbox] = useState<BboxNorm | null>(null);
+  const [workingBboxes, setWorkingBboxes] = useState<BboxNorm[]>([]);
+  /** Når true: workingBboxes er (delvis) tilpasset av bruker — ikke arv YOLO «usikker»-UI for rene modellforslag. */
+  const [manualAnnotationSession, setManualAnnotationSession] = useState(false);
+  const [selectedBoxI, setSelectedBoxI] = useState(0);
   const [yoloSplit, setYoloSplit] = useState<"" | "train" | "val" | "rejected">("train");
   const [annotatorId, setAnnotatorId] = useState("");
   const [queueStats, setQueueStats] = useState<{
@@ -68,8 +76,10 @@ export default function ReviewPage() {
         annotatorId.trim() !== ""
           ? `&annotator_id=${encodeURIComponent(annotatorId.trim())}`
           : "";
+      const imgQs =
+        imageIdsFilter !== "" ? `&image_ids=${encodeURIComponent(imageIdsFilter)}` : "";
       const [r, st] = await Promise.all([
-        fetch(`${API_BASE}/api/reviews/queue?limit=100${qs}`),
+        fetch(`${API_BASE}/api/reviews/queue?limit=100${qs}${imgQs}`),
         fetch(`${API_BASE}/api/reviews/queue-stats`),
       ]);
       const raw = await r.json();
@@ -105,7 +115,7 @@ export default function ReviewPage() {
       setIdx(0);
       setMsg(e instanceof Error ? e.message : "Kunne ikke hente kø");
     }
-  }, [annotatorId]);
+  }, [annotatorId, imageIdsFilter]);
 
   useEffect(() => {
     load();
@@ -115,14 +125,39 @@ export default function ReviewPage() {
     setIdx((i) => Math.min(i, Math.max(0, queue.length - 1)));
   }, [queue]);
 
-  const current = queue.length ? queue[idx] : undefined;
-
   useEffect(() => {
-    if (current) {
-      setAnnotationLabel(defaultAnnotationFromPredicted(current.prediction.predicted_status));
-      setManualBbox(null);
-    }
-  }, [current]);
+    setSelectedBoxI((i) =>
+      workingBboxes.length === 0 ? 0 : Math.min(i, Math.max(0, workingBboxes.length - 1))
+    );
+  }, [workingBboxes.length]);
+
+  // Synkroniser bbox-liste før maling — unngår én frame med nytt bilde men gamle workingBboxes (feil «Boks 1/2»).
+  useLayoutEffect(() => {
+    const item = queue.length ? queue[idx] : undefined;
+    if (!item) return;
+    setAnnotationLabel(defaultAnnotationFromPredicted(item.prediction.predicted_status));
+    const parsed = parsePredBboxes(item.prediction.bbox_json);
+    setWorkingBboxes(parsed);
+    setSelectedBoxI(0);
+    setManualAnnotationSession(false);
+  }, [queue, idx]);
+
+  const modelBboxesParsed = useMemo(
+    () => parsePredBboxes(queue.length ? queue[idx]?.prediction.bbox_json : undefined),
+    [queue, idx],
+  );
+
+  const yoloTrustMeta = useMemo(
+    () => parseYoloTrustMeta(queue.length ? queue[idx]?.prediction.bbox_json : undefined),
+    [queue, idx],
+  );
+
+  const yoloUncertain = useMemo(
+    () => yoloSuggestionsUncertain(queue.length ? queue[idx]?.prediction.bbox_json : undefined),
+    [queue, idx],
+  );
+
+  const showYoloUncertainUi = yoloUncertain && !manualAnnotationSession;
 
   const submit = useCallback(
     async (approveOnly: boolean) => {
@@ -138,7 +173,7 @@ export default function ReviewPage() {
           error_type: errorType || null,
           approve_without_change: approveOnly,
         };
-        if (manualBbox) body.annotation_bbox_json = manualBbox;
+        body.annotation_bboxes_json = workingBboxes;
         if (yoloSplit) body.yolo_dataset_split = yoloSplit;
         const headers: Record<string, string> = { "Content-Type": "application/json" };
         const aid = annotatorId.trim();
@@ -163,7 +198,7 @@ export default function ReviewPage() {
         setLoading(false);
       }
     },
-    [queue, idx, annotationLabel, manualBbox, yoloSplit, comment, errorType, annotatorId]
+    [queue, idx, annotationLabel, workingBboxes, yoloSplit, comment, errorType, annotatorId]
   );
 
   const claimNext = useCallback(async () => {
@@ -212,10 +247,34 @@ export default function ReviewPage() {
     return () => window.removeEventListener("keydown", onKey);
   }, [queue.length]);
 
+  const onBboxEditorChange = useCallback((b: BboxNorm | null) => {
+    setManualAnnotationSession(true);
+    if (b === null) {
+      setWorkingBboxes((prev) => prev.filter((_, i) => i !== selectedBoxI));
+      return;
+    }
+    setWorkingBboxes((prev) => {
+      if (prev.length === 0) return [b];
+      const n = [...prev];
+      if (selectedBoxI >= 0 && selectedBoxI < n.length) {
+        n[selectedBoxI] = b;
+        return n;
+      }
+      return [...n, b];
+    });
+  }, [selectedBoxI]);
+
+  const current = queue.length ? queue[idx] : undefined;
+
   if (!current) {
     return (
       <>
         <h1>Review-kø</h1>
+        {imageIdsFilter ? (
+          <p className="muted" style={{ fontSize: 13 }}>
+            Filtrert kø: kun bilder fra valgt Street View-scan (image_ids).
+          </p>
+        ) : null}
         <p>{queue.length === 0 && !msg ? "Ingen ventende — bra jobbet." : msg}</p>
         <button type="button" className="secondary" onClick={load}>
           Oppdater
@@ -228,10 +287,17 @@ export default function ReviewPage() {
   const im = current.image;
   const originalPreviewUrl = fileUrl(im.id, "original");
   const evidencePreviewUrl = fileUrl(im.id, "evidence");
+  const selectedBbox = workingBboxes[selectedBoxI] ?? null;
+  const peerBboxes = workingBboxes.filter((_, i) => i !== selectedBoxI);
 
   return (
     <>
       <h1>Review-kø</h1>
+      {imageIdsFilter ? (
+        <p className="muted" style={{ fontSize: 13 }}>
+          Filtrert kø: kun bilder fra valgt Street View-scan (image_ids).
+        </p>
+      ) : null}
       <div className="card" style={{ marginBottom: "1rem", padding: "0.75rem 1rem" }}>
         <label style={{ display: "block", marginBottom: 8 }}>
           Annotatør (navn / initialer — lagres med hver annotering)
@@ -265,11 +331,112 @@ export default function ReviewPage() {
       </p>
       <div className="grid2">
         <div className="card">
+          {showYoloUncertainUi && modelBboxesParsed.length > 0 && (
+            <p
+              className="muted"
+              style={{
+                fontSize: 13,
+                marginBottom: 10,
+                padding: "8px 10px",
+                background: "var(--surface)",
+                border: "1px solid var(--warn)",
+                borderRadius: 6,
+              }}
+            >
+              <strong>Usikre YOLO-forslag:</strong> modellen har ikke høy nok kvalitet på rangert primær
+              (conf × heuristikk under terskel). Alle {modelBboxesParsed.length} bokser er kun forslag — ingen
+              pålitelig auto-primær.
+              {yoloTrustMeta.yolo_primary_gate_reason ? (
+                <>
+                  {" "}
+                  <span style={{ fontSize: 12 }}>({yoloTrustMeta.yolo_primary_gate_reason})</span>
+                </>
+              ) : null}
+            </p>
+          )}
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "row",
+              alignItems: "stretch",
+              gap: 8,
+            }}
+          >
+            <button
+              type="button"
+              className="secondary"
+              aria-label="Forrige bilde i køen"
+              title="Forrige bilde"
+              disabled={idx <= 0}
+              onClick={() => setIdx((i) => Math.max(0, i - 1))}
+              style={{
+                alignSelf: "center",
+                flexShrink: 0,
+                minWidth: 44,
+                minHeight: 120,
+                padding: "4px 8px",
+                fontSize: 28,
+                lineHeight: 1,
+              }}
+            >
+              ‹
+            </button>
+            <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8, alignItems: "center" }}>
+            {workingBboxes.map((_, i) => (
+              <button
+                key={i}
+                type="button"
+                className={i === selectedBoxI ? undefined : "secondary"}
+                style={i === selectedBoxI ? { fontWeight: 600 } : undefined}
+                onClick={() => setSelectedBoxI(i)}
+              >
+                Boks {i + 1}
+                {showYoloUncertainUi ? " (usikker)" : ""}
+              </button>
+            ))}
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => {
+                setManualAnnotationSession(true);
+                const nb: BboxNorm = { x: 0.38, y: 0.38, w: 0.14, h: 0.11 };
+                let lastI = 0;
+                setWorkingBboxes((prev) => {
+                  const next = [...prev, nb];
+                  lastI = next.length - 1;
+                  return next;
+                });
+                setSelectedBoxI(lastI);
+              }}
+            >
+              Legg til boks
+            </button>
+            <button
+              type="button"
+              className="secondary"
+              disabled={workingBboxes.length === 0}
+              onClick={() => {
+                setManualAnnotationSession(true);
+                setWorkingBboxes((prev) => prev.filter((_, i) => i !== selectedBoxI));
+              }}
+            >
+              Slett valgt
+            </button>
+          </div>
           <ReviewBboxEditor
+            key={p.id}
             imageUrl={originalPreviewUrl}
-            modelBbox={p.bbox_json}
-            value={manualBbox}
-            onChange={setManualBbox}
+            modelBbox={selectedBbox}
+            peerBboxes={peerBboxes}
+            value={null}
+            onChange={onBboxEditorChange}
+            uncertainSuggestions={showYoloUncertainUi}
+            onResetAllFromModel={() => {
+              setManualAnnotationSession(false);
+              setWorkingBboxes(parsePredBboxes(p.bbox_json));
+              setSelectedBoxI(0);
+            }}
           />
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
@@ -288,6 +455,27 @@ export default function ReviewPage() {
               el.style.display = "none";
             }}
           />
+            </div>
+            <button
+              type="button"
+              className="secondary"
+              aria-label="Neste bilde i køen"
+              title="Neste bilde"
+              disabled={idx >= queue.length - 1}
+              onClick={() => setIdx((i) => Math.min(queue.length - 1, i + 1))}
+              style={{
+                alignSelf: "center",
+                flexShrink: 0,
+                minWidth: 44,
+                minHeight: 120,
+                padding: "4px 8px",
+                fontSize: 28,
+                lineHeight: 1,
+              }}
+            >
+              ›
+            </button>
+          </div>
         </div>
         <div className="card">
           <p>
@@ -305,10 +493,17 @@ export default function ReviewPage() {
           </p>
           <p>
             <strong>Modellforslag (ikke auto skilt_funnet):</strong> {p.predicted_status} ({p.confidence}%)
+            {showYoloUncertainUi && modelBboxesParsed.length > 0 ? (
+              <span className="muted" style={{ fontWeight: 600 }}>
+                {" "}
+                — rangert primær er markert som <em>usikker</em> (ikke pålitelig auto-valg).
+              </span>
+            ) : null}
           </p>
-          {p.bbox_json && (
+          {modelBboxesParsed.length > 0 && (
             <p className="muted" style={{ fontSize: 12 }}>
-              Bbox-forslag (0–1): {JSON.stringify(p.bbox_json)}
+              Bbox-forslag ({modelBboxesParsed.length}
+              {showYoloUncertainUi ? ", alle usikre" : ""}): {JSON.stringify(modelBboxesParsed)}
             </p>
           )}
           <p className="muted">{p.rationale}</p>
@@ -340,8 +535,8 @@ export default function ReviewPage() {
             </select>
           </label>
           <p className="muted" style={{ marginTop: 6, fontSize: 12 }}>
-            Lagres som status: {reviewStatusForAnnotation(annotationLabel)} · bbox: manuell hvis tegnet,
-            ellers modellforslag.
+            Lagres som status: {reviewStatusForAnnotation(annotationLabel)} · bokser: {workingBboxes.length}{" "}
+            (sendes som annotation_bboxes_json).
           </p>
           <label style={{ display: "block", marginTop: 8 }}>
             Feiltype (ved overstyring)
@@ -379,5 +574,13 @@ export default function ReviewPage() {
         </div>
       </div>
     </>
+  );
+}
+
+export default function ReviewPage() {
+  return (
+    <Suspense fallback={<div className="page"><p>Laster…</p></div>}>
+      <ReviewPageInner />
+    </Suspense>
   );
 }

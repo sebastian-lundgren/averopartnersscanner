@@ -21,6 +21,7 @@ from app.routers import (
     reviews,
     scanner,
     settings as settings_router,
+    streetview_scan_jobs,
     train_jobs,
     training,
     yolo_admin,
@@ -62,6 +63,7 @@ def create_app() -> FastAPI:
     app.include_router(train_jobs.router)
     app.include_router(files.router)
     app.include_router(scanner.router)
+    app.include_router(streetview_scan_jobs.router)
     app.include_router(yolo_admin.router)
 
     @app.get("/api/health")

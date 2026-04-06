@@ -1,14 +1,20 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 export type BboxNorm = { x: number; y: number; w: number; h: number };
 
 type Props = {
   imageUrl: string;
   modelBbox: BboxNorm | null;
+  /** Andre bokser (stiplet) — samme normerte koordinater som value. */
+  peerBboxes?: BboxNorm[];
   value: BboxNorm | null;
   onChange: (b: BboxNorm | null) => void;
+  /** Når satt: knapp gjenoppretter alle modellbokser (multi). Ellers: kopier én modellboks til value. */
+  onResetAllFromModel?: () => void;
+  /** YOLO: ingen pålitelig auto-primær — tegn valgt boks som usikkert forslag (stiplet), ikke som «sann» modell. */
+  uncertainSuggestions?: boolean;
 };
 
 const ZOOM_MIN = 0.35;
@@ -27,6 +33,28 @@ function hitSlopWorld(zoom: number): number {
 
 function clamp(n: number, a: number, b: number) {
   return Math.max(a, Math.min(b, n));
+}
+
+/** Holder skalert bilde innenfor viewport (ingen «tom» flate større enn nødvendig). */
+function clampPanToViewport(
+  panX: number,
+  panY: number,
+  zoom: number,
+  dw: number,
+  dh: number,
+  vpW: number,
+  vpH: number
+): { panX: number; panY: number } {
+  const cw = dw * zoom;
+  const ch = dh * zoom;
+  const minPx = Math.min(0, vpW - cw);
+  const maxPx = Math.max(0, vpW - cw);
+  const minPy = Math.min(0, vpH - ch);
+  const maxPy = Math.max(0, vpH - ch);
+  return {
+    panX: clamp(panX, minPx, maxPx),
+    panY: clamp(panY, minPy, maxPy),
+  };
 }
 
 type WorldBox = { l: number; t: number; r: number; b: number };
@@ -129,13 +157,25 @@ type Interact =
   | { k: "move"; i0: number; j0: number; bbox0: BboxNorm }
   | { k: "resize"; handle: HandleId; startWB: WorldBox };
 
-export default function ReviewBboxEditor({ imageUrl, modelBbox, value, onChange }: Props) {
+type EditorMode = "bbox" | "pan";
+
+export default function ReviewBboxEditor({
+  imageUrl,
+  modelBbox,
+  peerBboxes = [],
+  value,
+  onChange,
+  onResetAllFromModel,
+  uncertainSuggestions = false,
+}: Props) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
   const previewRef = useRef<HTMLCanvasElement>(null);
 
   const [natural, setNatural] = useState({ w: 1, h: 1 });
   const [drawn, setDrawn] = useState({ w: 320, h: 240 });
+  const drawnRef = useRef(drawn);
+  drawnRef.current = drawn;
   const [view, setView] = useState({ zoom: 1, panX: 0, panY: 0 });
   const viewRef = useRef(view);
   viewRef.current = view;
@@ -144,6 +184,7 @@ export default function ReviewBboxEditor({ imageUrl, modelBbox, value, onChange 
   const [interact, setInteract] = useState<Interact | null>(null);
   const [panDrag, setPanDrag] = useState<{ sx: number; sy: number; ox: number; oy: number } | null>(null);
   const [hoverHit, setHoverHit] = useState<HandleId | "inside" | null>(null);
+  const [editorMode, setEditorMode] = useState<EditorMode>("bbox");
 
   const effectiveBbox = value ?? modelBbox;
 
@@ -176,12 +217,29 @@ export default function ReviewBboxEditor({ imageUrl, modelBbox, value, onChange 
 
   useEffect(() => {
     setView({ zoom: 1, panX: 0, panY: 0 });
+    // Nytt bilde: dropp pågående tegning/flytt — ellers kan interact.k==="new" skjule modelBbox (previewBbox bruker newDragNorm først).
+    setInteract(null);
+    setPanDrag(null);
+    setHoverHit(null);
   }, [imageUrl]);
 
   useEffect(() => {
     setDrawn({ w: 320, h: 240 });
     setNatural({ w: 1, h: 1 });
   }, [imageUrl]);
+
+  useLayoutEffect(() => {
+    const vp = viewportRef.current;
+    const dw = drawn.w;
+    const dh = drawn.h;
+    if (!vp || dw <= 0 || dh <= 0) return;
+    const r = vp.getBoundingClientRect();
+    const v = viewRef.current;
+    const c = clampPanToViewport(v.panX, v.panY, v.zoom, dw, dh, r.width, r.height);
+    if (c.panX !== v.panX || c.panY !== v.panY) {
+      setView((prev) => ({ ...prev, panX: c.panX, panY: c.panY }));
+    }
+  }, [drawn.w, drawn.h]);
 
   const viewportToWorld = (vx: number, vy: number) => {
     const { zoom: z, panX: px, panY: py } = viewRef.current;
@@ -263,7 +321,17 @@ export default function ReviewBboxEditor({ imageUrl, modelBbox, value, onChange 
       const z1 = clamp(z0 * factor, ZOOM_MIN, ZOOM_MAX);
       const ix = (vx - v.panX) / z0;
       const iy = (vy - v.panY) / z0;
-      return { zoom: z1, panX: vx - ix * z1, panY: vy - iy * z1 };
+      let panX = vx - ix * z1;
+      let panY = vy - iy * z1;
+      const vp = viewportRef.current;
+      const { w: dw, h: dh } = drawnRef.current;
+      if (vp && dw > 0 && dh > 0) {
+        const r = vp.getBoundingClientRect();
+        const c = clampPanToViewport(panX, panY, z1, dw, dh, r.width, r.height);
+        panX = c.panX;
+        panY = c.panY;
+      }
+      return { zoom: z1, panX, panY };
     });
   };
 
@@ -310,6 +378,13 @@ export default function ReviewBboxEditor({ imageUrl, modelBbox, value, onChange 
       }
     }
 
+    if (editorMode === "pan") {
+      e.preventDefault();
+      const v = viewRef.current;
+      setPanDrag({ sx: e.clientX, sy: e.clientY, ox: v.panX, oy: v.panY });
+      return;
+    }
+
     setInteract({ k: "new", ax: ix, ay: iy, bx: ix, by: iy });
   };
 
@@ -331,11 +406,18 @@ export default function ReviewBboxEditor({ imageUrl, modelBbox, value, onChange 
   useEffect(() => {
     function onMove(e: MouseEvent) {
       if (panDrag) {
-        setView({
-          ...viewRef.current,
-          panX: panDrag.ox + (e.clientX - panDrag.sx),
-          panY: panDrag.oy + (e.clientY - panDrag.sy),
-        });
+        const v = viewRef.current;
+        let panX = panDrag.ox + (e.clientX - panDrag.sx);
+        let panY = panDrag.oy + (e.clientY - panDrag.sy);
+        const vp = viewportRef.current;
+        const { w: dw, h: dh } = drawnRef.current;
+        if (vp && dw > 0 && dh > 0) {
+          const r = vp.getBoundingClientRect();
+          const c = clampPanToViewport(panX, panY, v.zoom, dw, dh, r.width, r.height);
+          panX = c.panX;
+          panY = c.panY;
+        }
+        setView({ ...v, panX, panY });
         return;
       }
       if (!interact || !viewportRef.current) return;
@@ -405,19 +487,33 @@ export default function ReviewBboxEditor({ imageUrl, modelBbox, value, onChange 
         }
       : null;
 
-  const vpCursor = panDrag ? "grabbing" : interact ? "crosshair" : cursorForHit(hoverHit);
+  const vpCursor = panDrag
+    ? "grabbing"
+    : interact
+      ? "crosshair"
+      : hoverHit
+        ? cursorForHit(hoverHit)
+        : editorMode === "pan"
+          ? "grab"
+          : "crosshair";
 
   return (
     <div style={{ marginTop: 8 }}>
       <p className="muted" style={{ fontSize: 12 }}>
-        <strong>Zoom:</strong> mushjul · <strong>Pan:</strong> midtklikk / Alt / Shift+dra ·{" "}
-        <strong>Bbox:</strong> dra på tom flate · <strong>Flytt:</strong> dra inni boksen ·{" "}
-        <strong>Skaler:</strong> hjørner og kanter — overlay følger zoom i bildekoordinater; håndtak og treffflate er i skjerm-piksler.
+        <strong>Zoom:</strong> mushjul (bilde holdes i rammen) · <strong>Pan:</strong> velg «Dra bilde» eller
+        midtklikk / Alt / Shift+dra · <strong>Marker bbox:</strong> dra på tom flate · <strong>Flytt/skalér:</strong>{" "}
+        valgt boks — håndtak i skjerm-piksler.
       </p>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 6 }}>
-        <button type="button" className="secondary" onClick={() => onChange(modelBbox ? { ...modelBbox } : null)}>
-          Bruk modellforslag
-        </button>
+        {onResetAllFromModel ? (
+          <button type="button" className="secondary" onClick={() => onResetAllFromModel()}>
+            Bruk alle modellforslag
+          </button>
+        ) : (
+          <button type="button" className="secondary" onClick={() => onChange(modelBbox ? { ...modelBbox } : null)}>
+            Bruk modellforslag
+          </button>
+        )}
         <button type="button" className="secondary" onClick={() => onChange(null)}>
           Fjern bbox
         </button>
@@ -476,72 +572,141 @@ export default function ReviewBboxEditor({ imageUrl, modelBbox, value, onChange 
               draggable={false}
             />
           </div>
-          {rectScreen && (
-            <div
+          <div
+            style={{
+              position: "absolute",
+              left: 0,
+              top: 0,
+              right: 0,
+              bottom: 0,
+              pointerEvents: "none",
+              zIndex: 1,
+            }}
+          >
+            {peerBboxes.map((pb, pidx) => {
+              const pr = normToWorldRect(pb);
+              const pl = pr.left * zoom + panX;
+              const pt = pr.top * zoom + panY;
+              const pw = Math.max(0, pr.width * zoom);
+              const ph = Math.max(0, pr.height * zoom);
+              return (
+                <div
+                  key={`peer-${pidx}`}
+                  style={{
+                    position: "absolute",
+                    left: pl,
+                    top: pt,
+                    width: pw,
+                    height: ph,
+                    border: `${BBOX_OVERLAY_BORDER_PX}px dashed rgba(140, 140, 150, 0.9)`,
+                    boxSizing: "border-box",
+                    pointerEvents: "none",
+                    zIndex: 0,
+                  }}
+                />
+              );
+            })}
+            {rectScreen && (
+              <>
+                <div
+                  style={{
+                    position: "absolute",
+                    left: rectScreen.left,
+                    top: rectScreen.top,
+                    width: Math.max(0, rectScreen.width),
+                    height: Math.max(0, rectScreen.height),
+                    border:
+                      interact?.k === "new"
+                        ? `${BBOX_OVERLAY_BORDER_PX}px dashed var(--warn)`
+                        : uncertainSuggestions
+                          ? `${BBOX_OVERLAY_BORDER_PX + 1}px dashed rgba(200, 120, 40, 0.95)`
+                          : `${BBOX_OVERLAY_BORDER_PX}px solid var(--accent)`,
+                    boxSizing: "border-box",
+                    pointerEvents: "none",
+                    zIndex: 1,
+                  }}
+                />
+                {renderHandles &&
+                  rectWorld &&
+                  (["nw", "n", "ne", "e", "se", "s", "sw", "w"] as HandleId[]).map((hid) => {
+                    const { left, top, width, height } = rectWorld;
+                    const cx = left + width / 2;
+                    const cy = top + height / 2;
+                    const pos: Record<HandleId, [number, number]> = {
+                      nw: [left, top],
+                      n: [cx, top],
+                      ne: [left + width, top],
+                      e: [left + width, cy],
+                      se: [left + width, top + height],
+                      s: [cx, top + height],
+                      sw: [left, top + height],
+                      w: [left, cy],
+                    };
+                    const [wx, wy] = pos[hid];
+                    const hl = HANDLE_SCREEN_PX;
+                    const sl = wx * zoom + panX - hl / 2;
+                    const st = wy * zoom + panY - hl / 2;
+                    return (
+                      <div
+                        key={hid}
+                        style={{
+                          position: "absolute",
+                          left: sl,
+                          top: st,
+                          width: hl,
+                          height: hl,
+                          background: uncertainSuggestions ? "rgba(200, 120, 40, 0.95)" : "var(--accent)",
+                          border: "1px solid var(--text)",
+                          boxSizing: "border-box",
+                          pointerEvents: "none",
+                          zIndex: 2,
+                        }}
+                      />
+                    );
+                  })}
+              </>
+            )}
+          </div>
+          <div
+            style={{
+              position: "absolute",
+              right: 8,
+              bottom: 8,
+              zIndex: 5,
+              display: "flex",
+              gap: 4,
+              flexWrap: "wrap",
+              justifyContent: "flex-end",
+              maxWidth: "calc(100% - 16px)",
+              pointerEvents: "auto",
+            }}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <button
+              type="button"
+              className="secondary"
               style={{
-                position: "absolute",
-                left: 0,
-                top: 0,
-                right: 0,
-                bottom: 0,
-                pointerEvents: "none",
-                zIndex: 1,
+                fontSize: 11,
+                padding: "4px 8px",
+                boxShadow: editorMode === "bbox" ? "0 0 0 2px var(--accent)" : undefined,
               }}
+              onClick={() => setEditorMode("bbox")}
             >
-              <div
-                style={{
-                  position: "absolute",
-                  left: rectScreen.left,
-                  top: rectScreen.top,
-                  width: Math.max(0, rectScreen.width),
-                  height: Math.max(0, rectScreen.height),
-                  border:
-                    interact?.k === "new"
-                      ? `${BBOX_OVERLAY_BORDER_PX}px dashed var(--warn)`
-                      : `${BBOX_OVERLAY_BORDER_PX}px solid var(--accent)`,
-                  boxSizing: "border-box",
-                  pointerEvents: "none",
-                }}
-              />
-              {renderHandles &&
-                rectWorld &&
-                (["nw", "n", "ne", "e", "se", "s", "sw", "w"] as HandleId[]).map((hid) => {
-                  const { left, top, width, height } = rectWorld;
-                  const cx = left + width / 2;
-                  const cy = top + height / 2;
-                  const pos: Record<HandleId, [number, number]> = {
-                    nw: [left, top],
-                    n: [cx, top],
-                    ne: [left + width, top],
-                    e: [left + width, cy],
-                    se: [left + width, top + height],
-                    s: [cx, top + height],
-                    sw: [left, top + height],
-                    w: [left, cy],
-                  };
-                  const [wx, wy] = pos[hid];
-                  const hl = HANDLE_SCREEN_PX;
-                  const sl = wx * zoom + panX - hl / 2;
-                  const st = wy * zoom + panY - hl / 2;
-                  return (
-                    <div
-                      key={hid}
-                      style={{
-                        position: "absolute",
-                        left: sl,
-                        top: st,
-                        width: hl,
-                        height: hl,
-                        background: "var(--accent)",
-                        border: "1px solid var(--text)",
-                        boxSizing: "border-box",
-                        pointerEvents: "none",
-                      }}
-                    />
-                  );
-                })}
-            </div>
-          )}
+              Marker bbox
+            </button>
+            <button
+              type="button"
+              className="secondary"
+              style={{
+                fontSize: 11,
+                padding: "4px 8px",
+                boxShadow: editorMode === "pan" ? "0 0 0 2px var(--accent)" : undefined,
+              }}
+              onClick={() => setEditorMode("pan")}
+            >
+              Dra bilde
+            </button>
+          </div>
         </div>
         <div className="card" style={{ padding: 10, minWidth: 220, maxWidth: 240 }}>
           <p className="muted" style={{ fontSize: 11, marginBottom: 8 }}>

@@ -1,11 +1,16 @@
 export type BboxLike = { x: number; y: number; w: number; h: number };
 
-export function parseBbox(b: Record<string, number> | null | undefined): BboxLike | null {
-  if (!b || typeof b.x !== "number" || typeof b.y !== "number") return null;
-  const w = typeof b.w === "number" ? b.w : 0;
-  const h = typeof b.h === "number" ? b.h : 0;
+export function parseBbox(b: unknown): BboxLike | null {
+  if (!b || typeof b !== "object") return null;
+  const o = b as Record<string, unknown>;
+  if (Array.isArray(o.boxes) && o.boxes.length > 0) {
+    return parseBbox(o.boxes[0]);
+  }
+  if (typeof o.x !== "number" || typeof o.y !== "number") return null;
+  const w = typeof o.w === "number" ? o.w : 0;
+  const h = typeof o.h === "number" ? o.h : 0;
   if (w < 1e-6 || h < 1e-6) return null;
-  return { x: b.x, y: b.y, w, h };
+  return { x: o.x, y: o.y, w, h };
 }
 
 export function bboxIou(a: BboxLike, b: BboxLike): number {
@@ -28,7 +33,7 @@ export type RowForSummary = {
   error_type: string | null;
   comment: string | null;
   manual_bbox: Record<string, number> | null;
-  model_bbox: Record<string, number> | null;
+  model_bbox: unknown;
 };
 
 export type CropSource = "manual" | "model" | "none";

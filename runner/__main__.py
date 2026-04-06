@@ -23,6 +23,12 @@ def main() -> None:
     ap.add_argument("--postcode", type=str, required=True)
     ap.add_argument("--max-addresses", type=int, default=10)
     ap.add_argument("--max-attempts", type=int, default=config.MAX_ATTEMPTS)
+    ap.add_argument(
+        "--max-images",
+        type=int,
+        default=None,
+        help="Maks skjermbilder per adresse (begrenses sammen med --max-attempts og antall presets)",
+    )
     ap.add_argument("--headless", action="store_true", help="Overstyr til headless")
     args = ap.parse_args()
     if args.headless:
@@ -35,6 +41,7 @@ def main() -> None:
         postcode=args.postcode,
         max_addresses=args.max_addresses,
         max_attempts=args.max_attempts,
+        max_images_per_address=args.max_images,
         api=ScanApi(),
     )
 

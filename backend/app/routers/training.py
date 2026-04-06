@@ -42,6 +42,9 @@ def annotations_overview(skip: int = 0, limit: int = 500, db: Session = Depends(
                 "model_predicted_status": pred.predicted_status if pred else None,
                 "model_bbox": pred.bbox_json if pred else None,
                 "manual_bbox": tags.get("bbox_norm"),
+                "manual_bboxes": tags.get("bboxes_norm") or (
+                    [tags["bbox_norm"]] if tags.get("bbox_norm") else None
+                ),
                 "training_label": tags.get("annotation_label"),
                 "final_status": te.human_status,
                 "error_type": te.error_type,
