@@ -52,6 +52,11 @@ def _should_retry_overpass(error_msg: str) -> bool:
         or "timeout" in m
         or "timed out" in m
         or "nettverksfeil" in m
+        or "rate_limited" in m
+        or "another request from your ip" in m
+        or "too busy" in m
+        or "dispatcher" in m
+        or "osm3s response" in m
     )
 
 
@@ -186,6 +191,40 @@ def _parse_overpass_response_body(
         ) from e
 
 
+def _is_overpass_html_osm3s_response(ctype: str, raw: str) -> bool:
+    if "text/html" in (ctype or "").lower():
+        return True
+    if "<title>OSM3S Response</title>" in raw:
+        return True
+    return bool(re.search(r"<title>\s*OSM3S\s+Response\s*</title>", raw, re.I))
+
+
+def _extract_overpass_html_error(raw: str) -> str:
+    """Kort tekst fra OSM3S HTML-feilside; ellers snippet av body."""
+    plain = re.sub(r"<[^>]+>", " ", raw)
+    plain = re.sub(r"\s+", " ", plain).strip()
+    low = plain.lower()
+    markers = (
+        "rate_limited",
+        "another request from your ip",
+        "too busy",
+        "runtime error",
+        "timeout",
+        "dispatcher",
+        "error:",
+        "error ",
+    )
+    for mk in markers:
+        i = low.find(mk)
+        if i != -1:
+            chunk = plain[i : i + 220].strip()
+            return chunk + ("…" if len(plain) > i + 220 else "")
+    if plain:
+        p = plain[:280]
+        return p + ("…" if len(plain) > 280 else "")
+    return _snippet(raw)
+
+
 def _post_overpass(endpoint: str, query: str) -> tuple[int, str, str]:
     body = urllib.parse.urlencode({"data": query}).encode("utf-8")
     req = urllib.request.Request(
@@ -223,6 +262,12 @@ def _post_overpass(endpoint: str, query: str) -> tuple[int, str, str]:
     if not raw.strip():
         raise OverpassFetchError(
             f"Overpass svarte tom body (HTTP {status}) mot {endpoint} content-type={ctype!r}"
+        )
+    if _is_overpass_html_osm3s_response(ctype, raw):
+        detail = _extract_overpass_html_error(raw)
+        raise OverpassFetchError(
+            f"Overpass feil: osm3s response (HTML) mot {endpoint} HTTP {status} "
+            f"content-type={ctype!r} detail={detail!r}"
         )
     return status, ctype, raw
 
