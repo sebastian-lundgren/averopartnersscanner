@@ -68,6 +68,22 @@ def apply_schema_patches():
         with engine.begin() as conn:
             conn.execute(text(ddl))
 
+    def _ensure_pg_text(table: str, col: str) -> None:
+        if engine.dialect.name != "postgresql":
+            return
+        insp = inspect(engine)
+        if not insp.has_table(table):
+            return
+        columns = insp.get_columns(table)
+        current = next((c for c in columns if c["name"] == col), None)
+        if not current:
+            return
+        typ = str(current["type"]).lower()
+        if "char" not in typ and "varchar" not in typ:
+            return
+        with engine.begin() as conn:
+            conn.execute(text(f"ALTER TABLE {table} ALTER COLUMN {col} TYPE TEXT"))
+
     _add("model_versions", "weights_path", "ALTER TABLE model_versions ADD COLUMN weights_path VARCHAR(1024)")
     _add(
         "model_versions",
@@ -89,6 +105,8 @@ def apply_schema_patches():
         "locations_plan_json",
         "ALTER TABLE streetview_scan_jobs ADD COLUMN locations_plan_json TEXT",
     )
+    _ensure_pg_text("scan_attempts", "camera_state")
+    _ensure_pg_text("scan_attempts", "rationale")
 
 
 def init_db():

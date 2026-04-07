@@ -218,7 +218,7 @@ class ScanAttempt(Base):
     scan_run_item_id: Mapped[int] = mapped_column(Integer, ForeignKey("scan_run_items.id"), nullable=False, index=True)
     attempt_index: Mapped[int] = mapped_column(Integer, nullable=False)
     screenshot_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
-    camera_state: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    camera_state: Mapped[str | None] = mapped_column(Text, nullable=True)
     prediction_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
     confidence: Mapped[int | None] = mapped_column(Integer, nullable=True)
     bbox_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
