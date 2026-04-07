@@ -97,79 +97,94 @@ def start_gsv_scan_job_thread(job_id: int) -> None:
 
 
 def run_gsv_scan_job_sync(job_id: int) -> None:
-    db = SessionLocal()
+    temp_loc_file: Path | None = None
     try:
-        job = db.get(models.StreetViewScanJob, job_id)
-        if not job:
-            return
-        job.status = StreetViewScanJobStatus.RUNNING
-        job.started_at = datetime.utcnow()
-        job.error_message = None
-        db.commit()
+        db = SessionLocal()
+        try:
+            job = db.get(models.StreetViewScanJob, job_id)
+            if not job:
+                return
+            job.status = StreetViewScanJobStatus.RUNNING
+            job.started_at = datetime.utcnow()
+            job.error_message = None
+            db.commit()
+
+            run_job_id = job.id
+            run_postcode = job.postcode.strip()
+            run_max_locations = job.max_locations
+            run_max_attempts = job.max_attempts
+            run_max_images_per_address = job.max_images_per_address
+            run_locations_json_path = job.locations_json_path
+        finally:
+            db.close()
 
         repo = _repo_root()
-        temp_loc_file: Path | None = None
+        if run_locations_json_path == GSV_DYNAMIC_MARKER:
+            from app.services.gsv_location_fetch import write_locations_file_for_postcode
+
+            dyn_dir = Path(settings.upload_dir).resolve() / "gsv_dynamic"
+            temp_loc_file, plan_meta = write_locations_file_for_postcode(
+                dyn_dir, run_job_id, run_postcode, run_max_locations
+            )
+            loc = temp_loc_file.resolve()
+        else:
+            loc = Path(run_locations_json_path)
+            if not loc.is_absolute():
+                loc = repo / loc
+            loc = loc.resolve()
+            if not loc.is_file():
+                raise FileNotFoundError(f"Mangler locations-fil: {loc}")
+            from app.services.gsv_location_fetch import plan_from_static_file
+
+            plan_meta = plan_from_static_file(loc, run_postcode, run_max_locations)
+
+        db = SessionLocal()
         try:
-            if job.locations_json_path == GSV_DYNAMIC_MARKER:
-                from app.services.gsv_location_fetch import write_locations_file_for_postcode
-
-                dyn_dir = Path(settings.upload_dir).resolve() / "gsv_dynamic"
-                temp_loc_file, plan_meta = write_locations_file_for_postcode(
-                    dyn_dir, job.id, job.postcode.strip(), job.max_locations
-                )
-                loc = temp_loc_file.resolve()
-            else:
-                loc = Path(job.locations_json_path)
-                if not loc.is_absolute():
-                    loc = repo / loc
-                loc = loc.resolve()
-                if not loc.is_file():
-                    raise FileNotFoundError(f"Mangler locations-fil: {loc}")
-                from app.services.gsv_location_fetch import plan_from_static_file
-
-                plan_meta = plan_from_static_file(loc, job.postcode.strip(), job.max_locations)
-
             job = db.get(models.StreetViewScanJob, job_id)
             if not job:
                 return
             job.locations_plan_json = json.dumps(plan_meta, ensure_ascii=False)
             db.commit()
+        finally:
+            db.close()
 
-            env = os.environ.copy()
-            env["SCANNER_API_BASE"] = settings.gsv_scan_runner_api_base.rstrip("/")
-            tok = (settings.scanner_api_token or "").strip()
-            if tok:
-                env["SCANNER_API_TOKEN"] = tok
+        env = os.environ.copy()
+        env["SCANNER_API_BASE"] = settings.gsv_scan_runner_api_base.rstrip("/")
+        tok = (settings.scanner_api_token or "").strip()
+        if tok:
+            env["SCANNER_API_TOKEN"] = tok
 
-            py = _resolve_runner_python_executable(repo)
-            cmd = [
-                py,
-                "-m",
-                "runner",
-                "--locations",
-                str(loc),
-                "--postcode",
-                job.postcode,
-                "--max-addresses",
-                str(job.max_locations),
-                "--max-attempts",
-                str(job.max_attempts),
-                "--max-images",
-                str(job.max_images_per_address),
-            ]
-            proc = subprocess.run(
-                cmd,
-                cwd=str(repo),
-                env=env,
-                capture_output=True,
-                text=True,
-                timeout=None,
-            )
+        py = _resolve_runner_python_executable(repo)
+        cmd = [
+            py,
+            "-m",
+            "runner",
+            "--locations",
+            str(loc),
+            "--postcode",
+            run_postcode,
+            "--max-addresses",
+            str(run_max_locations),
+            "--max-attempts",
+            str(run_max_attempts),
+            "--max-images",
+            str(run_max_images_per_address),
+        ]
+        proc = subprocess.run(
+            cmd,
+            cwd=str(repo),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=None,
+        )
 
-            combined_log = f"{proc.stdout or ''}\n{proc.stderr or ''}"
-            m = re.search(r"ScanRun\s+(\d+)\s+med", combined_log)
-            parsed_run_id = int(m.group(1)) if m else None
+        combined_log = f"{proc.stdout or ''}\n{proc.stderr or ''}"
+        m = re.search(r"ScanRun\s+(\d+)\s+med", combined_log)
+        parsed_run_id = int(m.group(1)) if m else None
 
+        db = SessionLocal()
+        try:
             job = db.get(models.StreetViewScanJob, job_id)
             if not job:
                 return
@@ -185,18 +200,21 @@ def run_gsv_scan_job_sync(job_id: int) -> None:
             job.finished_at = datetime.utcnow()
             db.commit()
         finally:
-            if temp_loc_file is not None and temp_loc_file.is_file():
-                try:
-                    temp_loc_file.unlink(missing_ok=True)
-                except OSError:
-                    pass
+            db.close()
     except Exception as e:
-        db.rollback()
-        job = db.get(models.StreetViewScanJob, job_id)
-        if job:
-            job.status = StreetViewScanJobStatus.FAILED
-            job.error_message = str(e)[:8000]
-            job.finished_at = datetime.utcnow()
-            db.commit()
+        db = SessionLocal()
+        try:
+            job = db.get(models.StreetViewScanJob, job_id)
+            if job:
+                job.status = StreetViewScanJobStatus.FAILED
+                job.error_message = str(e)[:8000]
+                job.finished_at = datetime.utcnow()
+                db.commit()
+        finally:
+            db.close()
     finally:
-        db.close()
+        if temp_loc_file is not None and temp_loc_file.is_file():
+            try:
+                temp_loc_file.unlink(missing_ok=True)
+            except OSError:
+                pass
