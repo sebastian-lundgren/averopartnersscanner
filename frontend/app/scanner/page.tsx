@@ -144,6 +144,8 @@ export default function ScannerPage() {
     s && s.image_ids.length > 0 ? `/review?image_ids=${encodeURIComponent(s.image_ids.join(","))}` : "/review";
 
   const jobImages = job?.max_images_per_address ?? DEFAULT_MAX_IMAGES;
+  const maxFromPlan = job?.locations_plan?.unique_address_count ?? 0;
+  const canUseMaxFromPlan = maxFromPlan > 0;
 
   return (
     <div className="page">
@@ -168,14 +170,24 @@ export default function ScannerPage() {
         </label>
         <label style={{ display: "block", marginBottom: 10, fontSize: 14 }}>
           Maks antall adresser
-          <input
-            type="number"
-            min={1}
-            max={500}
-            value={maxLocations}
-            onChange={(e) => setMaxLocations(e.target.value)}
-            style={{ display: "block", width: "100%", maxWidth: 200, marginTop: 4 }}
-          />
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}>
+            <input
+              type="number"
+              min={1}
+              max={500}
+              value={maxLocations}
+              onChange={(e) => setMaxLocations(e.target.value)}
+              style={{ display: "block", width: "100%", maxWidth: 200 }}
+            />
+            <button
+              type="button"
+              className="secondary"
+              disabled={!canUseMaxFromPlan}
+              onClick={() => setMaxLocations(String(maxFromPlan))}
+            >
+              Maks
+            </button>
+          </div>
         </label>
         <label style={{ display: "block", marginBottom: 10, fontSize: 14 }}>
           Maks antall forsøk per adresse

@@ -6,11 +6,13 @@ from __future__ import annotations
 
 import json
 import uuid
+from io import BytesIO
 from typing import Any
 from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile
+from PIL import Image, ImageDraw
 from sqlalchemy.orm import Session
 
 from app import models, schemas
@@ -27,6 +29,37 @@ from app.services.bbox_multi import (
 from app.services.evidence import save_evidence_crop
 
 router = APIRouter(prefix="/api/scanner", tags=["scanner"])
+
+
+def _annotate_scan_image_with_bboxes(
+    source_path: str, bboxes: list[dict[str, float]], filename_hint: str
+) -> str | None:
+    if not bboxes:
+        return None
+    local_img, tmp_del = materialize_local_path(source_path, suffix=".scan-annotate")
+    try:
+        with Image.open(local_img).convert("RGB") as im:
+            draw = ImageDraw.Draw(im)
+            w, h = im.size
+            for b in bboxes:
+                x1 = max(0, min(w - 1, int(float(b.get("x", 0.0)) * w)))
+                y1 = max(0, min(h - 1, int(float(b.get("y", 0.0)) * h)))
+                x2 = max(0, min(w, int((float(b.get("x", 0.0)) + float(b.get("w", 0.0))) * w)))
+                y2 = max(0, min(h, int((float(b.get("y", 0.0)) + float(b.get("h", 0.0))) * h)))
+                if x2 <= x1 or y2 <= y1:
+                    continue
+                draw.rectangle((x1, y1, x2, y2), outline=(255, 64, 64), width=4)
+
+            buf = BytesIO()
+            im.save(buf, format="JPEG", quality=92)
+            return store_upload_bytes(
+                buf.getvalue(),
+                f"scan_annotated_{uuid.uuid4().hex[:12]}_{Path(filename_hint).name}",
+                "image/jpeg",
+            )[0]
+    finally:
+        if tmp_del:
+            local_img.unlink(missing_ok=True)
 
 
 def _check_scanner_token(x_scanner_token: str | None = Header(None)) -> None:
@@ -239,13 +272,9 @@ async def ingest_yolo(
 
     content = await file.read()
     safe = Path(file.filename or "scan.jpg").name
-    from app.services.blob_storage import materialize_local_path, store_upload_bytes
-
     stored_path, _ = store_upload_bytes(
         content, f"scan_{uuid.uuid4().hex[:12]}_{safe}", file.content_type or "image/jpeg"
     )
-
-    from PIL import Image
 
     local_img, tmp_del = materialize_local_path(stored_path, suffix=".scan")
     try:
@@ -281,6 +310,11 @@ async def ingest_yolo(
         height=h,
         is_temporary_candidate=True,
     )
+    if box:
+        bboxes_for_draw = parse_bboxes_from_pred_json(box)
+        annotated_path = _annotate_scan_image_with_bboxes(stored_path, bboxes_for_draw, safe)
+        if annotated_path:
+            img.stored_path = annotated_path
     db.add(img)
     db.flush()
 
