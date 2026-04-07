@@ -5,6 +5,7 @@ Street View scan-runner API: lagre forsøk, treff, og push bilder inn i review-k
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from io import BytesIO
 from typing import Any
@@ -29,6 +30,7 @@ from app.services.bbox_multi import (
 from app.services.evidence import save_evidence_crop
 
 router = APIRouter(prefix="/api/scanner", tags=["scanner"])
+log = logging.getLogger(__name__)
 
 
 def _annotate_scan_image_with_bboxes(
@@ -271,6 +273,15 @@ async def ingest_yolo(
     box = canonicalize_bboxes(parsed, yolo_meta=yolo_meta if yolo_meta else None) if parsed else None
     bboxes_for_draw = parse_bboxes_from_pred_json(box) if box else []
     bbox_count = len(bboxes_for_draw)
+    log.info(
+        "DIAG ingest_yolo recv: item_id=%s location_id=%s predicted_status=%s confidence=%s bbox_count=%s bbox_json=%s",
+        scan_run_item_id,
+        location_id,
+        predicted_status,
+        confidence,
+        bbox_count,
+        bbox_json,
+    )
 
     content = await file.read()
     safe = Path(file.filename or "scan.jpg").name

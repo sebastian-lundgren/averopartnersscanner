@@ -119,6 +119,11 @@ class ScanApi:
         raw = screenshot.read_bytes()
         mime = "image/png" if screenshot.suffix.lower() == ".png" else "image/jpeg"
         files = {"file": (screenshot.name, raw, mime)}
+        bbox_count = 0
+        if isinstance(bbox, dict) and isinstance(bbox.get("boxes"), list):
+            bbox_count = len(bbox.get("boxes") or [])
+        elif isinstance(bbox, list):
+            bbox_count = len(bbox)
         data = {
             "scan_run_item_id": str(scan_run_item_id),
             "location_id": str(location_id),
@@ -131,6 +136,15 @@ class ScanApi:
             "rationale": rationale,
             "predicted_status": "uklart",
         }
+        log.info(
+            "DIAG ingest_yolo call: item_id=%s location_id=%s predicted_status=%s confidence=%s bbox_count=%s bbox_json=%s",
+            scan_run_item_id,
+            location_id,
+            data["predicted_status"],
+            confidence,
+            bbox_count,
+            data["bbox_json"],
+        )
         r = httpx.post(
             f"{self.base}/api/scanner/ingest-yolo",
             data=data,
