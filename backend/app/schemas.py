@@ -215,6 +215,13 @@ class ScanJobAddressOutcome(BaseModel):
     images_saved: int = 0
 
 
+class ScanJobImageDebug(BaseModel):
+    image_id: int
+    bbox_count: int = 0
+    used_stored_path: str | None = None
+    annotated: bool = False
+
+
 class StreetViewScanJobResultSummary(BaseModel):
     scan_run_id: int
     run_status: str
@@ -225,6 +232,7 @@ class StreetViewScanJobResultSummary(BaseModel):
     image_ids: list[int]
     predictions_pending_review: int
     address_outcomes: list[ScanJobAddressOutcome] = Field(default_factory=list)
+    image_debug: list[ScanJobImageDebug] = Field(default_factory=list)
 
 
 class StreetViewScanJobOut(BaseModel):

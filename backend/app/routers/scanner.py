@@ -269,6 +269,8 @@ async def ingest_yolo(
         if isinstance(gr, str):
             yolo_meta["yolo_primary_gate_reason"] = gr[:500]
     box = canonicalize_bboxes(parsed, yolo_meta=yolo_meta if yolo_meta else None) if parsed else None
+    bboxes_for_draw = parse_bboxes_from_pred_json(box) if box else []
+    bbox_count = len(bboxes_for_draw)
 
     content = await file.read()
     safe = Path(file.filename or "scan.jpg").name
@@ -301,6 +303,7 @@ async def ingest_yolo(
         db.flush()
 
     mv = _yolo_model_version(db)
+    annotated_path = None
     img = models.ImageAsset(
         address_id=addr.id if addr else None,
         original_filename=safe,
@@ -311,7 +314,6 @@ async def ingest_yolo(
         is_temporary_candidate=True,
     )
     if box:
-        bboxes_for_draw = parse_bboxes_from_pred_json(box)
         annotated_path = _annotate_scan_image_with_bboxes(stored_path, bboxes_for_draw, safe)
         if annotated_path:
             img.stored_path = annotated_path
@@ -359,4 +361,8 @@ async def ingest_yolo(
         "image_id": img.id,
         "prediction_id": pred.id,
         "detection_hit_id": hit.id,
+        "original_stored_path": stored_path,
+        "annotated_stored_path": annotated_path,
+        "used_stored_path": img.stored_path,
+        "bbox_count": bbox_count,
     }

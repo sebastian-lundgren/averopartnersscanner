@@ -11,6 +11,7 @@ from app import models, schemas
 from app.config import settings
 from app.database import get_db
 from app.models import StreetViewScanJobStatus
+from app.services.bbox_multi import parse_bboxes_from_pred_json
 from app.services.gsv_scan_job_runner import create_gsv_scan_job, start_gsv_scan_job_thread
 
 router = APIRouter(prefix="/api/streetview-scan-jobs", tags=["streetview-scan-jobs"])
@@ -56,6 +57,25 @@ def _build_result_summary(
         .order_by(models.ScanRunItem.id.asc())
         .all()
     )
+    image_debug: list[schemas.ScanJobImageDebug] = []
+    for iid in image_ids:
+        img = db.get(models.ImageAsset, iid)
+        pred = (
+            db.query(models.Prediction)
+            .filter(models.Prediction.image_id == iid)
+            .order_by(models.Prediction.created_at.desc())
+            .first()
+        )
+        boxes = parse_bboxes_from_pred_json(pred.bbox_json) if pred and pred.bbox_json else []
+        used = img.stored_path if img else None
+        image_debug.append(
+            schemas.ScanJobImageDebug(
+                image_id=iid,
+                bbox_count=len(boxes),
+                used_stored_path=used,
+                annotated=bool(used and "scan_annotated_" in used),
+            )
+        )
     address_outcomes: list[schemas.ScanJobAddressOutcome] = []
     for ord_i, it in enumerate(items, start=1):
         tl = db.get(models.TestLocation, it.location_id)
@@ -91,6 +111,7 @@ def _build_result_summary(
         image_ids=image_ids,
         predictions_pending_review=pred_pending,
         address_outcomes=address_outcomes,
+        image_debug=image_debug,
     )
 
 

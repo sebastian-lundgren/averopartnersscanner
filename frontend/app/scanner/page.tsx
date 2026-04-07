@@ -28,6 +28,12 @@ type ResultSummary = {
   image_ids: number[];
   predictions_pending_review: number;
   address_outcomes?: AddressOutcome[];
+  image_debug?: Array<{
+    image_id: number;
+    bbox_count: number;
+    used_stored_path: string | null;
+    annotated: boolean;
+  }>;
 };
 
 type LocationsPlan = {
@@ -381,21 +387,33 @@ export default function ScannerPage() {
                 <li>Prediksjoner som venter review (for disse bildene): {s.predictions_pending_review}</li>
               </ul>
               {(hasFindings || s.predictions_pending_review > 0) && (
-                <p style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
-                  <Link className="primary" href={reviewHref} style={{ padding: "6px 12px", borderRadius: 6 }}>
-                    Gå til review-kø for disse bildene
-                  </Link>
-                  {s.image_ids.slice(0, 6).map((id) => (
-                    <Link key={id} href={`/library/${id}`} className="secondary" style={{ padding: "6px 10px" }}>
-                      Bibliotek #{id}
+                <div>
+                  <p style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+                    <Link className="primary" href={reviewHref} style={{ padding: "6px 12px", borderRadius: 6 }}>
+                      Gå til review-kø for disse bildene
                     </Link>
-                  ))}
-                  {s.image_ids.length > 6 ? (
-                    <span className="muted" style={{ fontSize: 12 }}>
-                      +{s.image_ids.length - 6} flere (bruk review-lenken)
-                    </span>
+                    {s.image_ids.slice(0, 6).map((id) => (
+                      <Link key={id} href={`/library/${id}`} className="secondary" style={{ padding: "6px 10px" }}>
+                        Bibliotek #{id}
+                      </Link>
+                    ))}
+                    {s.image_ids.length > 6 ? (
+                      <span className="muted" style={{ fontSize: 12 }}>
+                        +{s.image_ids.length - 6} flere (bruk review-lenken)
+                      </span>
+                    ) : null}
+                  </p>
+                  {s.image_debug && s.image_debug.length > 0 ? (
+                    <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>
+                      {s.image_debug.map((d) => (
+                        <div key={d.image_id}>
+                          image #{d.image_id} · bbox_count={d.bbox_count} · annotated={d.annotated ? "yes" : "no"} · used_stored_path=
+                          {d.used_stored_path || "(null)"}
+                        </div>
+                      ))}
+                    </div>
                   ) : null}
-                </p>
+                </div>
               )}
               {!hasFindings && s.predictions_pending_review === 0 ? (
                 <p className="muted" style={{ fontSize: 13 }}>
