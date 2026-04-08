@@ -151,9 +151,12 @@ def _try_click_street_view_entry(page: Page) -> bool:
 
 def _try_click_first_thumbnail(page: Page) -> bool:
     candidates = (
-        'button img[src*="googleusercontent"]',
-        'a img[src*="googleusercontent"]',
-        'img[src*="googleusercontent"]',
+        '[aria-label*="bilder" i] button img',
+        '[aria-label*="photos" i] button img',
+        '[aria-label*="bilder" i] a img',
+        '[aria-label*="photos" i] a img',
+        '[data-section-id*="photos" i] button img',
+        '[data-section-id*="photos" i] a img',
     )
     for sel in candidates:
         try:
@@ -201,6 +204,37 @@ def open_default_streetview_from_address(
     if not clicked:
         log.info("THUMBNAIL_FORCED_TRY address=%r", address)
         try:
+            page.goto(search_url, wait_until="domcontentloaded", timeout=config.PAGE_TIMEOUT_MS)
+            _dismiss_common_overlays(page)
+            place_card_ok = False
+            for sel in ('h1', '[role="main"] h1', '[data-section-id]', '[aria-label*="Results" i]'):
+                try:
+                    loc = page.locator(sel).first
+                    if loc.count() and loc.is_visible(timeout=2200):
+                        place_card_ok = True
+                        break
+                except Exception:
+                    continue
+            if not place_card_ok:
+                raise RuntimeError("place card-state ikke synlig etter return to search")
+            thumb_area_ok = False
+            for sel in (
+                '[aria-label*="bilder" i] button img',
+                '[aria-label*="photos" i] button img',
+                '[aria-label*="bilder" i] a img',
+                '[aria-label*="photos" i] a img',
+                '[data-section-id*="photos" i] button img',
+                '[data-section-id*="photos" i] a img',
+            ):
+                try:
+                    loc = page.locator(sel).first
+                    if loc.count() and loc.is_visible(timeout=2200):
+                        thumb_area_ok = True
+                        break
+                except Exception:
+                    continue
+            if not thumb_area_ok:
+                raise RuntimeError("thumbnail/bilder-område ikke synlig i place card-state")
             thumb_ok = _try_click_first_thumbnail(page)
             if thumb_ok:
                 page.wait_for_timeout(2200)
