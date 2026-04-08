@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import platform
 import re
@@ -19,6 +20,8 @@ from app.database import SessionLocal
 from app.models import StreetViewScanJobStatus
 
 GSV_DYNAMIC_MARKER = "__dynamic__"
+
+log = logging.getLogger(__name__)
 
 
 def _repo_root() -> Path:
@@ -114,6 +117,7 @@ def run_gsv_scan_job_sync(job_id: int) -> None:
             run_max_locations = job.max_locations
             run_max_attempts = job.max_attempts
             run_max_images_per_address = job.max_images_per_address
+            run_scan_run_id = job.scan_run_id
             run_locations_json_path = job.locations_json_path
         finally:
             db.close()
@@ -170,9 +174,21 @@ def run_gsv_scan_job_sync(job_id: int) -> None:
             "--max-images",
             str(run_max_images_per_address),
         ]
+        cwd = str(repo)
+        log.info(
+            "GSV runner subprocess start job_id=%s scan_run_id=%s max_attempts=%s "
+            "max_images_per_address=%s runner_python=%s cwd=%s cmd=%r",
+            run_job_id,
+            run_scan_run_id,
+            run_max_attempts,
+            run_max_images_per_address,
+            py,
+            cwd,
+            cmd,
+        )
         proc = subprocess.run(
             cmd,
-            cwd=str(repo),
+            cwd=cwd,
             env=env,
             capture_output=True,
             text=True,
