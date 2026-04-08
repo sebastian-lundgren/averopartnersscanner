@@ -175,7 +175,7 @@ def run_gsv_scan_job_sync(job_id: int) -> None:
             str(run_max_images_per_address),
         ]
         cwd = str(repo)
-        log.info(
+        log.warning(
             "GSV runner subprocess start job_id=%s scan_run_id=%s max_attempts=%s "
             "max_images_per_address=%s runner_python=%s cwd=%s cmd=%r",
             run_job_id,
