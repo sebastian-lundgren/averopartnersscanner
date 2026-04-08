@@ -248,16 +248,20 @@ def run_scan(
             else:
                 page.wait_for_timeout(500)
                 snap = refresh_pano_snapshot(page) or snap0
+                cam_lat = snap.lat if snap is not None else tgt_lat
+                cam_lon = snap.lon if snap is not None else tgt_lon
+                heading_hint = snap.heading_deg if snap is not None else None
                 main_view = StreetViewAttempt(
                     view_id="standard_front",
-                    camera_lat=snap.lat,
-                    camera_lon=snap.lon,
-                    heading_deg=snap.heading_deg,
+                    camera_lat=cam_lat,
+                    camera_lon=cam_lon,
+                    heading_deg=heading_hint,
                     pitch_deg=0.0,
                     fov_deg=75.0,
                     plan_reason=(
                         "Google Maps første Street View etter søk på JSON-adresse "
                         "(samme som når man søker manuelt og åpner forslaget)"
+                        + ("; snapshot manglet, bruker target-fallback" if snap is None else "")
                     ),
                 )
                 extra = max(0, min(2, per_address_iters - 1))
@@ -266,8 +270,8 @@ def run_scan(
                 lateral_status, left_chain, right_chain = build_lateral_front_attempts(
                     tgt_lat,
                     tgt_lon,
-                    snap.lat,
-                    snap.lon,
+                    cam_lat,
+                    cam_lon,
                     want_left=want_left,
                     want_right=want_right,
                 )
@@ -276,15 +280,15 @@ def run_scan(
                     "MAPS_SCAN_SUMMARY address=%r hovedbilde=Google Street View-forslag brukt (standard_front @ %.6f,%.6f) | "
                     "front_left=%s | front_right=%s",
                     addr,
-                    snap.lat,
-                    snap.lon,
+                    cam_lat,
+                    cam_lon,
                     lateral_status.get("front_left", ""),
                     lateral_status.get("front_right", ""),
                 )
                 log.info(
                     "SV_NEIGHBOR_SUMMARY hovedpano=%.6f,%.6f | venstre=%s | høyre=%s",
-                    snap.lat,
-                    snap.lon,
+                    cam_lat,
+                    cam_lon,
                     lateral_status.get("front_left", ""),
                     lateral_status.get("front_right", ""),
                 )

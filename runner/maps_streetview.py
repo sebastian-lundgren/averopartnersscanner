@@ -149,6 +149,15 @@ def _try_click_street_view_entry(page: Page) -> bool:
     return False
 
 
+def _looks_like_street_view_url(url: str) -> bool:
+    u = (url or "").lower()
+    return (
+        "map_action=pano" in u
+        or ",3a," in u
+        or ("!3m5!1s" in u and "/@" in u)
+    )
+
+
 def open_default_streetview_from_address(
     page: Page,
     address: str,
@@ -186,11 +195,7 @@ def open_default_streetview_from_address(
         href = page.url
         snapshot = parse_maps_pano_from_url(href)
         canvas_ok = page.locator("canvas").count() > 0
-        sv_url = (
-            "3a" in href
-            or "map_action=pano" in href
-            or (canvas_ok and "!3d" in href)
-        )
+        sv_url = _looks_like_street_view_url(href)
         if snapshot and sv_url:
             log.info(
                 "MAPS_SV_MAIN_OPEN url_head=%s lat=%.6f lon=%.6f heading=%s canvas=%s",
@@ -201,6 +206,12 @@ def open_default_streetview_from_address(
                 canvas_ok,
             )
             return True, snapshot, ""
+        if sv_url and canvas_ok:
+            log.info(
+                "MAPS_SV_MAIN_OPEN url_head=%s uten_snapshot_parse (canvas+SV-URL) — godtar hovedview",
+                href[:100],
+            )
+            return True, None, ""
         page.wait_for_timeout(int(step_s * 1000))
         elapsed += step_s
 
