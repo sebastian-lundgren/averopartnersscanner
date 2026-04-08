@@ -149,6 +149,42 @@ def _try_click_street_view_entry(page: Page) -> bool:
     return False
 
 
+def _try_click_first_thumbnail(page: Page) -> bool:
+    try:
+        loc = page.locator('button[jsaction="pane.wfvdle7.heroHeaderImage"]').first
+        if loc.count() and loc.is_visible(timeout=2500):
+            loc.click(timeout=5000)
+            log.info("THUMBNAIL_FORCED_CLICK_SELECTOR %s", 'button[jsaction="pane.wfvdle7.heroHeaderImage"]')
+            return True
+    except Exception:
+        pass
+    try:
+        loc = page.locator('button:has(img[src*="streetviewpixels-pa.googleapis.com/v1/thumbnail"])').first
+        if loc.count() and loc.is_visible(timeout=2500):
+            loc.click(timeout=5000)
+            log.info(
+                "THUMBNAIL_FORCED_CLICK_SELECTOR %s",
+                'button:has(img[src*="streetviewpixels-pa.googleapis.com/v1/thumbnail"])',
+            )
+            return True
+    except Exception:
+        pass
+    try:
+        img = page.locator('img[src*="streetviewpixels-pa.googleapis.com/v1/thumbnail"]').first
+        if img.count() and img.is_visible(timeout=2500):
+            btn = img.locator("xpath=ancestor::button[1]")
+            if btn.count() and btn.first.is_visible(timeout=2500):
+                btn.first.click(timeout=5000)
+                log.info(
+                    "THUMBNAIL_FORCED_CLICK_SELECTOR %s",
+                    'img[src*="streetviewpixels-pa.googleapis.com/v1/thumbnail"] -> ancestor::button[1]',
+                )
+                return True
+    except Exception:
+        pass
+    return False
+
+
 def _looks_like_street_view_url(url: str) -> bool:
     u = (url or "").lower()
     return (
@@ -182,6 +218,76 @@ def open_default_streetview_from_address(
 
     clicked = _try_click_street_view_entry(page)
     if not clicked:
+        log.info("THUMBNAIL_FORCED_TRY address=%r", address)
+        log.info("THUMB_DEBUG_URL_BEFORE_RETURN %s", page.url)
+        try:
+            page.goto(search_url, wait_until="domcontentloaded", timeout=config.PAGE_TIMEOUT_MS)
+            log.info("THUMB_DEBUG_URL_AFTER_RETURN %s", page.url)
+            _dismiss_common_overlays(page)
+            for sel in (
+                'button[jsaction="pane.wfvdle7.heroHeaderImage"]',
+                'img[src*="streetviewpixels-pa.googleapis.com/v1/thumbnail"]',
+                'img[src*="panoid="]',
+            ):
+                try:
+                    loc = page.locator(sel)
+                    count = loc.count()
+                    visible = bool(count > 0 and loc.first.is_visible(timeout=1200))
+                    log.info(
+                        "THUMB_DEBUG_SELECTOR %s count=%s visible=%s",
+                        sel,
+                        count,
+                        str(visible).lower(),
+                    )
+                except Exception:
+                    log.info("THUMB_DEBUG_SELECTOR %s count=0 visible=false", sel)
+            place_card_ok = False
+            for sel in ('h1', '[role="main"] h1', '[data-section-id]', '[aria-label*="Results" i]'):
+                try:
+                    loc = page.locator(sel).first
+                    if loc.count() and loc.is_visible(timeout=2200):
+                        place_card_ok = True
+                        break
+                except Exception:
+                    continue
+            if not place_card_ok:
+                raise RuntimeError("place card-state ikke synlig etter return to search")
+            thumb_area_ok = False
+            for sel in (
+                '[aria-label*="bilder" i] button img',
+                '[aria-label*="photos" i] button img',
+                '[aria-label*="bilder" i] a img',
+                '[aria-label*="photos" i] a img',
+                '[data-section-id*="photos" i] button img',
+                '[data-section-id*="photos" i] a img',
+            ):
+                try:
+                    loc = page.locator(sel).first
+                    if loc.count() and loc.is_visible(timeout=2200):
+                        thumb_area_ok = True
+                        break
+                except Exception:
+                    continue
+            if not thumb_area_ok:
+                raise RuntimeError("thumbnail/bilder-område ikke synlig i place card-state")
+            thumb_ok = _try_click_first_thumbnail(page)
+            if thumb_ok:
+                page.wait_for_timeout(2200)
+                canvas_ok = page.locator("canvas").count() > 0
+                img_ok = page.locator("img").count() > 0
+                if canvas_ok or img_ok:
+                    log.info("THUMBNAIL_FORCED_CAPTURED address=%r", address)
+                    return True, None, "thumbnail_forced"
+        except Exception:
+            pass
+        try:
+            safe_addr = re.sub(r"[^a-zA-Z0-9_-]+", "_", address).strip("_")[:80] or "unknown"
+            dbg_path = f"/tmp/thumb_debug_{safe_addr}.png"
+            page.screenshot(path=dbg_path, full_page=True)
+            log.info("THUMB_DEBUG_SCREENSHOT %s", dbg_path)
+        except Exception:
+            pass
+        log.warning("THUMBNAIL_FORCED_FAILED address=%r", address)
         reason = "fant ingen klikkbar Street View-kontroll etter adressesøk"
         log.warning("MAPS_SV_MAIN_FAIL %s", reason)
         return False, None, reason

@@ -237,7 +237,8 @@ def run_scan(
                     subsequent_address=subsequent_addr,
                 )
 
-            if not maps_main_ok or snap0 is None:
+            forced_thumbnail_mode = maps_main_reason == "thumbnail_forced"
+            if not maps_main_ok:
                 log.info(
                     "MAPS_SCAN_SUMMARY address=%r hovedbilde=hoppet (%s) | front_left=hoppet (krever hovedpano) | "
                     "front_right=hoppet (krever hovedpano)",
@@ -408,6 +409,31 @@ def run_scan(
                     best_bbox = det.bbox_norm_xywh
 
                 with step_timer(log, "api_ingest_yolo", item_id=item_id, attempt=attempt_idx, route=route):
+                    if forced_thumbnail_mode:
+                        log.info(
+                            "THUMBNAIL_FORCED_REVIEW_BYPASS item=%s attempt=%s",
+                            item_id,
+                            attempt_idx,
+                        )
+                        bbox_use = bbox_for_api
+                        conf_use = int(det.confidence_pct) if det.has_detection else 0
+                        push_scan_capture(
+                            api,
+                            shot,
+                            scan_run_item_id=item_id,
+                            location_id=lid,
+                            address=addr,
+                            postcode=postcode,
+                            lat=tgt_lat,
+                            lon=tgt_lon,
+                            attempt_index=attempt_idx,
+                            camera_state=f"{cam_label}|forced_thumbnail",
+                            bbox=bbox_use,
+                            confidence=conf_use,
+                            yolo_note=det.rationale,
+                            decision_note=f"{dec.reason} ({dec.tier}) | forced_thumbnail_capture",
+                        )
+                        return True
                     if dec.save_hit and det.bbox_norm_xywh:
                         push_detection(
                             api,

@@ -101,33 +101,6 @@ def _dismiss_common_overlays(page: Page) -> None:
             continue
 
 
-def _is_consent_gate(url: str) -> bool:
-    return "consent.google.com" in (url or "").lower()
-
-
-def _exit_consent_gate(page: Page, *, address: str) -> bool:
-    if not _is_consent_gate(page.url):
-        return True
-    for label in (
-        "Jeg godtar",
-        "Godta alle",
-        "Accept all",
-        "I agree",
-        "I accept",
-    ):
-        try:
-            btn = page.get_by_role("button", name=re.compile(re.escape(label), re.I)).first
-            if btn.count() and btn.is_visible(timeout=1800):
-                btn.click(timeout=5000)
-                page.wait_for_timeout(1200)
-                if not _is_consent_gate(page.url):
-                    log.info("MAPS_CONSENT_EXIT address=%r via=%r", address, label)
-                    return True
-        except Exception:
-            continue
-    return not _is_consent_gate(page.url)
-
-
 def _try_click_street_view_entry(page: Page) -> bool:
     for pat in _STREET_VIEW_NAME_RES:
         try:
@@ -177,22 +150,6 @@ def _try_click_street_view_entry(page: Page) -> bool:
 
 
 def _try_click_first_thumbnail(page: Page) -> bool:
-    candidates = (
-        '[aria-label*="bilder" i] button img',
-        '[aria-label*="photos" i] button img',
-        '[aria-label*="bilder" i] a img',
-        '[aria-label*="photos" i] a img',
-        '[data-section-id*="photos" i] button img',
-        '[data-section-id*="photos" i] a img',
-    )
-    for sel in candidates:
-        try:
-            loc = page.locator(sel).first
-            if loc.count() and loc.is_visible(timeout=2500):
-                loc.click(timeout=5000)
-                return True
-        except Exception:
-            continue
     try:
         loc = page.locator('button[jsaction="pane.wfvdle7.heroHeaderImage"]').first
         if loc.count() and loc.is_visible(timeout=2500):
@@ -254,12 +211,6 @@ def open_default_streetview_from_address(
         page.goto(search_url, wait_until="domcontentloaded", timeout=config.PAGE_TIMEOUT_MS)
     page.wait_for_timeout(1200)
     _dismiss_common_overlays(page)
-    if _is_consent_gate(page.url):
-        _exit_consent_gate(page, address=address)
-        if _is_consent_gate(page.url):
-            reason = "Google consent-gate aktiv (kunne ikke forlate consent-skjerm)"
-            log.warning("MAPS_SV_MAIN_FAIL %s", reason)
-            return False, None, reason
     base_wait = (
         config.VIEW_WAIT_AFTER_FIRST_ADDR_MS if subsequent_address else config.VIEW_WAIT_MS
     )
@@ -273,10 +224,6 @@ def open_default_streetview_from_address(
             page.goto(search_url, wait_until="domcontentloaded", timeout=config.PAGE_TIMEOUT_MS)
             log.info("THUMB_DEBUG_URL_AFTER_RETURN %s", page.url)
             _dismiss_common_overlays(page)
-            if _is_consent_gate(page.url):
-                _exit_consent_gate(page, address=address)
-                if _is_consent_gate(page.url):
-                    raise RuntimeError("consent-gate fortsatt aktiv etter return-to-search")
             for sel in (
                 'button[jsaction="pane.wfvdle7.heroHeaderImage"]',
                 'img[src*="streetviewpixels-pa.googleapis.com/v1/thumbnail"]',
@@ -305,15 +252,32 @@ def open_default_streetview_from_address(
                     continue
             if not place_card_ok:
                 raise RuntimeError("place card-state ikke synlig etter return to search")
+            thumb_area_ok = False
+            for sel in (
+                '[aria-label*="bilder" i] button img',
+                '[aria-label*="photos" i] button img',
+                '[aria-label*="bilder" i] a img',
+                '[aria-label*="photos" i] a img',
+                '[data-section-id*="photos" i] button img',
+                '[data-section-id*="photos" i] a img',
+            ):
+                try:
+                    loc = page.locator(sel).first
+                    if loc.count() and loc.is_visible(timeout=2200):
+                        thumb_area_ok = True
+                        break
+                except Exception:
+                    continue
+            if not thumb_area_ok:
+                raise RuntimeError("thumbnail/bilder-område ikke synlig i place card-state")
             thumb_ok = _try_click_first_thumbnail(page)
-            if not thumb_ok:
-                raise RuntimeError("fant ingen klikkbar thumbnail i place card-state")
-            page.wait_for_timeout(2200)
-            canvas_ok = page.locator("canvas").count() > 0
-            img_ok = page.locator("img").count() > 0
-            if canvas_ok or img_ok:
-                log.info("THUMBNAIL_FORCED_CAPTURED address=%r", address)
-                return True, None, "thumbnail_forced"
+            if thumb_ok:
+                page.wait_for_timeout(2200)
+                canvas_ok = page.locator("canvas").count() > 0
+                img_ok = page.locator("img").count() > 0
+                if canvas_ok or img_ok:
+                    log.info("THUMBNAIL_FORCED_CAPTURED address=%r", address)
+                    return True, None, "thumbnail_forced"
         except Exception:
             pass
         try:
