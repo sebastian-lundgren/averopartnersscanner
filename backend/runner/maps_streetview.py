@@ -149,6 +149,23 @@ def _try_click_street_view_entry(page: Page) -> bool:
     return False
 
 
+def _try_click_first_thumbnail(page: Page) -> bool:
+    candidates = (
+        'button img[src*="googleusercontent"]',
+        'a img[src*="googleusercontent"]',
+        'img[src*="googleusercontent"]',
+    )
+    for sel in candidates:
+        try:
+            loc = page.locator(sel).first
+            if loc.count() and loc.is_visible(timeout=2500):
+                loc.click(timeout=5000)
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def _looks_like_street_view_url(url: str) -> bool:
     u = (url or "").lower()
     return (
@@ -182,6 +199,19 @@ def open_default_streetview_from_address(
 
     clicked = _try_click_street_view_entry(page)
     if not clicked:
+        log.info("THUMBNAIL_FORCED_TRY address=%r", address)
+        try:
+            thumb_ok = _try_click_first_thumbnail(page)
+            if thumb_ok:
+                page.wait_for_timeout(2200)
+                canvas_ok = page.locator("canvas").count() > 0
+                img_ok = page.locator("img").count() > 0
+                if canvas_ok or img_ok:
+                    log.info("THUMBNAIL_FORCED_CAPTURED address=%r", address)
+                    return True, None, "thumbnail_forced"
+        except Exception:
+            pass
+        log.warning("THUMBNAIL_FORCED_FAILED address=%r", address)
         reason = "fant ingen klikkbar Street View-kontroll etter adressesøk"
         log.warning("MAPS_SV_MAIN_FAIL %s", reason)
         return False, None, reason
