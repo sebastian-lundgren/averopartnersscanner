@@ -12,10 +12,21 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 from runner import config
+from runner.capture import capture_viewport
 from runner.decision import evaluate
-from runner.maps_streetview import open_placecard_hero_thumbnail
+from runner.maps_streetview import (
+    open_default_streetview_from_address,
+    open_first_distinct_neighbor_pano,
+    open_placecard_hero_thumbnail,
+    refresh_pano_snapshot,
+)
+from runner.navigator import (
+    focus_street_view_for_capture,
+    settle_streetview_after_canvas_ready,
+)
 from runner.result_store import ScanApi
 from runner.review_integration import push_detection, push_scan_capture
+from runner.streetview_candidates import build_lateral_front_attempts
 from runner.timing import step_timer
 from runner.yolo_detector import DetectorResult, run_yolo
 
@@ -103,6 +114,8 @@ def run_scan(
     log.info("ScanRun %s med %s stopp", run_id, len(items))
 
     tmp_root = Path(tempfile.mkdtemp(prefix="sv_scan_"))
+    img_cap = max_images_per_address if max_images_per_address is not None else max_attempts
+    per_address_iters = min(max_attempts, img_cap)
     scan_t0 = time.perf_counter()
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=config.HEADLESS)
@@ -210,7 +223,116 @@ def run_scan(
                             yolo_note=det.rationale,
                             decision_note=f"{dec.reason} ({dec.tier}) | source=maps_hero_thumbnail_direct",
                         )
-
+                extra = max(0, min(2, per_address_iters - 1))
+                want_left = extra >= 1
+                want_right = extra >= 2
+                if want_left or want_right:
+                    side_page = context.new_page()
+                    try:
+                        side_ok, snap0, _ = open_default_streetview_from_address(
+                            side_page,
+                            addr,
+                            subsequent_address=subsequent_addr,
+                        )
+                        if side_ok:
+                            snap = refresh_pano_snapshot(side_page) or snap0
+                            cam_lat = snap.lat if snap is not None else tgt_lat
+                            cam_lon = snap.lon if snap is not None else tgt_lon
+                            lateral_status, left_chain, right_chain = build_lateral_front_attempts(
+                                tgt_lat,
+                                tgt_lon,
+                                cam_lat,
+                                cam_lon,
+                                want_left=want_left,
+                                want_right=want_right,
+                            )
+                            for side_name, side_idx, chain in (
+                                ("front_left", 1, left_chain if want_left else []),
+                                ("front_right", 2, right_chain if want_right else []),
+                            ):
+                                if not chain:
+                                    continue
+                                res = open_first_distinct_neighbor_pano(
+                                    side_page,
+                                    chain,
+                                    tgt_lat=tgt_lat,
+                                    tgt_lon=tgt_lon,
+                                    quick_settle=True,
+                                )
+                                if res is None:
+                                    notes_parts.append(f"{side_name}=hoppet")
+                                    continue
+                                side_view, _ = res
+                                settle_streetview_after_canvas_ready(
+                                    side_page,
+                                    first_attempt=False,
+                                    subsequent_address=False,
+                                )
+                                focus_street_view_for_capture(side_page, allow_scene_click=False)
+                                side_shot = tmp_root / f"r{run_id}_i{item_id}_a{side_idx}.png"
+                                capture_viewport(
+                                    side_page,
+                                    side_shot,
+                                    pre_stabilize_ms=config.CAPTURE_PRE_STABILIZE_MS_NEXT,
+                                )
+                                det_side = run_yolo(side_shot, config.YOLO_MODEL_PATH)
+                                dec_side = evaluate(det_side, best_bbox if best_bbox else None)
+                                bbox_side = _bbox_payload_for_api(det_side)
+                                side_label = (
+                                    f"{side_name}|cam={side_view.camera_lat:.5f},{side_view.camera_lon:.5f}"
+                                    f"|source=legacy_neighbor_step"
+                                )
+                                api.log_attempt(
+                                    run_id,
+                                    item_id,
+                                    side_idx,
+                                    screenshot_path=str(side_shot),
+                                    camera_state=side_label,
+                                    prediction_status="hit" if det_side.has_detection else "no_hit",
+                                    confidence=det_side.confidence_pct,
+                                    bbox_json=bbox_side,
+                                    rationale=f"{det_side.rationale} | {dec_side.reason} | source=legacy_neighbor_step",
+                                )
+                                if dec_side.save_hit and det_side.bbox_norm_xywh:
+                                    push_detection(
+                                        api,
+                                        side_shot,
+                                        scan_run_item_id=item_id,
+                                        location_id=lid,
+                                        address=addr,
+                                        postcode=postcode,
+                                        lat=tgt_lat,
+                                        lon=tgt_lon,
+                                        confidence=det_side.confidence_pct,
+                                        bbox=bbox_side,
+                                        rationale=f"{det_side.rationale} ({dec_side.tier}) view={side_name}",
+                                    )
+                                    pushed_hit = True
+                                    if det_side.confidence > best_conf:
+                                        best_conf = det_side.confidence
+                                        best_bbox = det_side.bbox_norm_xywh
+                                else:
+                                    push_scan_capture(
+                                        api,
+                                        side_shot,
+                                        scan_run_item_id=item_id,
+                                        location_id=lid,
+                                        address=addr,
+                                        postcode=postcode,
+                                        lat=tgt_lat,
+                                        lon=tgt_lon,
+                                        attempt_index=side_idx,
+                                        camera_state=side_label,
+                                        bbox=bbox_side,
+                                        confidence=int(det_side.confidence_pct) if det_side.has_detection else 0,
+                                        yolo_note=det_side.rationale,
+                                        decision_note=f"{dec_side.reason} ({dec_side.tier})",
+                                    )
+                                notes_parts.append(
+                                    f"{side_name}={lateral_status.get(side_name, 'lagret')}"
+                                )
+                    finally:
+                        side_page.close()
             with step_timer(log, "api_complete_item", item_id=item_id):
                 api.complete_item(
                     run_id,

@@ -12,7 +12,7 @@ load_dotenv()
 # Repo-rot = forelder av runner/-mappen (uavhengig av cwd ved `python -m runner` fra prosjektrot).
 _RUNNER_DIR = Path(__file__).resolve().parent
 _REPO_ROOT = _RUNNER_DIR.parent
-_DEFAULT_YOLO = _REPO_ROOT / "backend" / "data" / "models" / "yolov8s.pt"
+_DEFAULT_YOLO = _REPO_ROOT / "data" / "models" / "yolov8s.pt"
 
 
 def _resolve_yolo_model_path(raw: str | None) -> Path:
