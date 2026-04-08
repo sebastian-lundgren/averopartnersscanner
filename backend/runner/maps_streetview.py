@@ -219,9 +219,28 @@ def open_default_streetview_from_address(
     clicked = _try_click_street_view_entry(page)
     if not clicked:
         log.info("THUMBNAIL_FORCED_TRY address=%r", address)
+        log.info("THUMB_DEBUG_URL_BEFORE_RETURN %s", page.url)
         try:
             page.goto(search_url, wait_until="domcontentloaded", timeout=config.PAGE_TIMEOUT_MS)
+            log.info("THUMB_DEBUG_URL_AFTER_RETURN %s", page.url)
             _dismiss_common_overlays(page)
+            for sel in (
+                'button[jsaction="pane.wfvdle7.heroHeaderImage"]',
+                'img[src*="streetviewpixels-pa.googleapis.com/v1/thumbnail"]',
+                'img[src*="panoid="]',
+            ):
+                try:
+                    loc = page.locator(sel)
+                    count = loc.count()
+                    visible = bool(count > 0 and loc.first.is_visible(timeout=1200))
+                    log.info(
+                        "THUMB_DEBUG_SELECTOR %s count=%s visible=%s",
+                        sel,
+                        count,
+                        str(visible).lower(),
+                    )
+                except Exception:
+                    log.info("THUMB_DEBUG_SELECTOR %s count=0 visible=false", sel)
             place_card_ok = False
             for sel in ('h1', '[role="main"] h1', '[data-section-id]', '[aria-label*="Results" i]'):
                 try:
@@ -259,6 +278,13 @@ def open_default_streetview_from_address(
                 if canvas_ok or img_ok:
                     log.info("THUMBNAIL_FORCED_CAPTURED address=%r", address)
                     return True, None, "thumbnail_forced"
+        except Exception:
+            pass
+        try:
+            safe_addr = re.sub(r"[^a-zA-Z0-9_-]+", "_", address).strip("_")[:80] or "unknown"
+            dbg_path = f"/tmp/thumb_debug_{safe_addr}.png"
+            page.screenshot(path=dbg_path, full_page=True)
+            log.info("THUMB_DEBUG_SCREENSHOT %s", dbg_path)
         except Exception:
             pass
         log.warning("THUMBNAIL_FORCED_FAILED address=%r", address)
