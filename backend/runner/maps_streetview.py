@@ -305,32 +305,15 @@ def open_default_streetview_from_address(
                     continue
             if not place_card_ok:
                 raise RuntimeError("place card-state ikke synlig etter return to search")
-            thumb_area_ok = False
-            for sel in (
-                '[aria-label*="bilder" i] button img',
-                '[aria-label*="photos" i] button img',
-                '[aria-label*="bilder" i] a img',
-                '[aria-label*="photos" i] a img',
-                '[data-section-id*="photos" i] button img',
-                '[data-section-id*="photos" i] a img',
-            ):
-                try:
-                    loc = page.locator(sel).first
-                    if loc.count() and loc.is_visible(timeout=2200):
-                        thumb_area_ok = True
-                        break
-                except Exception:
-                    continue
-            if not thumb_area_ok:
-                raise RuntimeError("thumbnail/bilder-område ikke synlig i place card-state")
             thumb_ok = _try_click_first_thumbnail(page)
-            if thumb_ok:
-                page.wait_for_timeout(2200)
-                canvas_ok = page.locator("canvas").count() > 0
-                img_ok = page.locator("img").count() > 0
-                if canvas_ok or img_ok:
-                    log.info("THUMBNAIL_FORCED_CAPTURED address=%r", address)
-                    return True, None, "thumbnail_forced"
+            if not thumb_ok:
+                raise RuntimeError("fant ingen klikkbar thumbnail i place card-state")
+            page.wait_for_timeout(2200)
+            canvas_ok = page.locator("canvas").count() > 0
+            img_ok = page.locator("img").count() > 0
+            if canvas_ok or img_ok:
+                log.info("THUMBNAIL_FORCED_CAPTURED address=%r", address)
+                return True, None, "thumbnail_forced"
         except Exception:
             pass
         try:
