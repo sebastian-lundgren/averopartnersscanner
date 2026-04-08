@@ -226,6 +226,13 @@ def run_scan(
                 extra = max(0, min(2, per_address_iters - 1))
                 want_left = extra >= 1
                 want_right = extra >= 2
+                notes_parts.append(
+                    f"SIDE: per_address_iters={per_address_iters} want_left={want_left} want_right={want_right}"
+                )
+                if not want_left and not want_right:
+                    notes_parts.append(
+                        "SIDE: blokk hoppet (ingen side ønsket; øk max_attempts/max_images for a1/a2)"
+                    )
                 log.info(
                     "SIDE_BLOCK_START item_id=%s per_address_iters=%s want_left=%s want_right=%s",
                     item_id,
@@ -253,6 +260,14 @@ def run_scan(
                                 want_left=want_left,
                                 want_right=want_right,
                             )
+                            if want_left and not left_chain:
+                                notes_parts.append(
+                                    "front_left=hoppet (ingen lateral chain etter build_lateral_front_attempts)"
+                                )
+                            if want_right and not right_chain:
+                                notes_parts.append(
+                                    "front_right=hoppet (ingen lateral chain etter build_lateral_front_attempts)"
+                                )
                             for side_name, side_idx, chain in (
                                 ("front_left", 1, left_chain if want_left else []),
                                 ("front_right", 2, right_chain if want_right else []),
@@ -267,7 +282,9 @@ def run_scan(
                                     quick_settle=True,
                                 )
                                 if res is None:
-                                    notes_parts.append(f"{side_name}=hoppet")
+                                    notes_parts.append(
+                                        f"{side_name}=hoppet (open_first_distinct_neighbor_pano: ingen kandidat i chain ga gyldig SV)"
+                                    )
                                     continue
                                 side_view, _ = res
                                 settle_streetview_after_canvas_ready(
@@ -336,7 +353,7 @@ def run_scan(
                                         decision_note=f"{dec_side.reason} ({dec_side.tier})",
                                     )
                                 notes_parts.append(
-                                    f"{side_name}={lateral_status.get(side_name, 'lagret')}"
+                                    f"{side_name}=tatt (viewport+yolo+api; lateral={lateral_status.get(side_name, 'ok')})"
                                 )
                         else:
                             log.warning(
