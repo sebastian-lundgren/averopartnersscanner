@@ -150,38 +150,123 @@ def _try_click_street_view_entry(page: Page) -> bool:
 
 
 def _try_click_first_thumbnail(page: Page) -> bool:
+    strategy_results: list[str] = []
     try:
+        attempted_click = False
+        click_success = False
         loc = page.locator('button[jsaction="pane.wfvdle7.heroHeaderImage"]').first
-        if loc.count() and loc.is_visible(timeout=2500):
+        count = loc.count()
+        visible = bool(count > 0 and loc.is_visible(timeout=2500))
+        if visible:
+            attempted_click = True
             loc.click(timeout=5000)
+            click_success = True
             log.info("THUMBNAIL_FORCED_CLICK_SELECTOR %s", 'button[jsaction="pane.wfvdle7.heroHeaderImage"]')
+            log.info(
+                "THUMB_DEBUG_STRATEGY selector=%s count=%s visible=%s attempted_click=%s click_success=%s",
+                'button[jsaction="pane.wfvdle7.heroHeaderImage"]',
+                count,
+                str(visible).lower(),
+                str(attempted_click).lower(),
+                str(click_success).lower(),
+            )
             return True
+        strategy_results.append('button[jsaction="pane.wfvdle7.heroHeaderImage"]')
+        log.info(
+            "THUMB_DEBUG_STRATEGY selector=%s count=%s visible=%s attempted_click=%s click_success=%s",
+            'button[jsaction="pane.wfvdle7.heroHeaderImage"]',
+            count,
+            str(visible).lower(),
+            "false",
+            "false",
+        )
     except Exception:
-        pass
+        strategy_results.append('button[jsaction="pane.wfvdle7.heroHeaderImage"]')
+        log.info(
+            "THUMB_DEBUG_STRATEGY selector=%s count=0 visible=false attempted_click=no click_success=no",
+            'button[jsaction="pane.wfvdle7.heroHeaderImage"]',
+        )
     try:
+        attempted_click = False
+        click_success = False
         loc = page.locator('button:has(img[src*="streetviewpixels-pa.googleapis.com/v1/thumbnail"])').first
-        if loc.count() and loc.is_visible(timeout=2500):
+        count = loc.count()
+        visible = bool(count > 0 and loc.is_visible(timeout=2500))
+        if visible:
+            attempted_click = True
             loc.click(timeout=5000)
+            click_success = True
             log.info(
                 "THUMBNAIL_FORCED_CLICK_SELECTOR %s",
                 'button:has(img[src*="streetviewpixels-pa.googleapis.com/v1/thumbnail"])',
             )
+            log.info(
+                "THUMB_DEBUG_STRATEGY selector=%s count=%s visible=%s attempted_click=%s click_success=%s",
+                'button:has(img[src*="streetviewpixels-pa.googleapis.com/v1/thumbnail"])',
+                count,
+                str(visible).lower(),
+                str(attempted_click).lower(),
+                str(click_success).lower(),
+            )
             return True
+        strategy_results.append('button:has(img[src*="streetviewpixels-pa.googleapis.com/v1/thumbnail"])')
+        log.info(
+            "THUMB_DEBUG_STRATEGY selector=%s count=%s visible=%s attempted_click=%s click_success=%s",
+            'button:has(img[src*="streetviewpixels-pa.googleapis.com/v1/thumbnail"])',
+            count,
+            str(visible).lower(),
+            "false",
+            "false",
+        )
     except Exception:
-        pass
+        strategy_results.append('button:has(img[src*="streetviewpixels-pa.googleapis.com/v1/thumbnail"])')
+        log.info(
+            "THUMB_DEBUG_STRATEGY selector=%s count=0 visible=false attempted_click=no click_success=no",
+            'button:has(img[src*="streetviewpixels-pa.googleapis.com/v1/thumbnail"])',
+        )
     try:
+        attempted_click = False
+        click_success = False
         img = page.locator('img[src*="streetviewpixels-pa.googleapis.com/v1/thumbnail"]').first
-        if img.count() and img.is_visible(timeout=2500):
+        img_count = img.count()
+        img_visible = bool(img_count > 0 and img.is_visible(timeout=2500))
+        if img_visible:
             btn = img.locator("xpath=ancestor::button[1]")
-            if btn.count() and btn.first.is_visible(timeout=2500):
+            btn_count = btn.count()
+            btn_visible = bool(btn_count > 0 and btn.first.is_visible(timeout=2500))
+            if btn_visible:
+                attempted_click = True
                 btn.first.click(timeout=5000)
+                click_success = True
                 log.info(
                     "THUMBNAIL_FORCED_CLICK_SELECTOR %s",
                     'img[src*="streetviewpixels-pa.googleapis.com/v1/thumbnail"] -> ancestor::button[1]',
                 )
+                log.info(
+                    "THUMB_DEBUG_STRATEGY selector=%s count=%s visible=%s attempted_click=%s click_success=%s",
+                    'img[src*="streetviewpixels-pa.googleapis.com/v1/thumbnail"] -> ancestor::button[1]',
+                    btn_count,
+                    str(btn_visible).lower(),
+                    str(attempted_click).lower(),
+                    str(click_success).lower(),
+                )
                 return True
+        strategy_results.append('img[src*="streetviewpixels-pa.googleapis.com/v1/thumbnail"] -> ancestor::button[1]')
+        log.info(
+            "THUMB_DEBUG_STRATEGY selector=%s count=%s visible=%s attempted_click=%s click_success=%s",
+            'img[src*="streetviewpixels-pa.googleapis.com/v1/thumbnail"] -> ancestor::button[1]',
+            img_count,
+            str(img_visible).lower(),
+            "false",
+            "false",
+        )
     except Exception:
-        pass
+        strategy_results.append('img[src*="streetviewpixels-pa.googleapis.com/v1/thumbnail"] -> ancestor::button[1]')
+        log.info(
+            "THUMB_DEBUG_STRATEGY selector=%s count=0 visible=false attempted_click=no click_success=no",
+            'img[src*="streetviewpixels-pa.googleapis.com/v1/thumbnail"] -> ancestor::button[1]',
+        )
+    log.info("THUMB_DEBUG_STRATEGIES_FAILED %s", ",".join(strategy_results) or "none")
     return False
 
 
@@ -252,6 +337,21 @@ def open_default_streetview_from_address(
                     continue
             if not place_card_ok:
                 raise RuntimeError("place card-state ikke synlig etter return to search")
+            h1_txt = ""
+            h1_match = False
+            try:
+                h1 = page.locator("h1").first
+                if h1.count():
+                    h1_txt = (h1.inner_text(timeout=1200) or "").strip()
+                    h1_match = address.lower() in h1_txt.lower()
+            except Exception:
+                pass
+            log.info(
+                "THUMB_DEBUG_PLACECARD_H1 address=%r h1=%r match=%s",
+                address,
+                h1_txt,
+                str(h1_match).lower(),
+            )
             thumb_area_ok = False
             for sel in (
                 '[aria-label*="bilder" i] button img',
@@ -284,7 +384,7 @@ def open_default_streetview_from_address(
             safe_addr = re.sub(r"[^a-zA-Z0-9_-]+", "_", address).strip("_")[:80] or "unknown"
             dbg_path = f"/tmp/thumb_debug_{safe_addr}.png"
             page.screenshot(path=dbg_path, full_page=True)
-            log.info("THUMB_DEBUG_SCREENSHOT %s", dbg_path)
+            log.info("THUMB_DEBUG_SCREENSHOT address=%r strategy=all_failed path=%s", address, dbg_path)
         except Exception:
             pass
         log.warning("THUMBNAIL_FORCED_FAILED address=%r", address)
