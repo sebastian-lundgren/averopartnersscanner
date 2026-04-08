@@ -226,10 +226,17 @@ def run_scan(
                 extra = max(0, min(2, per_address_iters - 1))
                 want_left = extra >= 1
                 want_right = extra >= 2
+                log.info(
+                    "SIDE_BLOCK_START item_id=%s per_address_iters=%s want_left=%s want_right=%s",
+                    item_id,
+                    per_address_iters,
+                    want_left,
+                    want_right,
+                )
                 if want_left or want_right:
                     side_page = context.new_page()
                     try:
-                        side_ok, snap0, _ = open_default_streetview_from_address(
+                        side_ok, snap0, side_reason = open_default_streetview_from_address(
                             side_page,
                             addr,
                             subsequent_address=subsequent_addr,
@@ -331,6 +338,15 @@ def run_scan(
                                 notes_parts.append(
                                     f"{side_name}={lateral_status.get(side_name, 'lagret')}"
                                 )
+                        else:
+                            log.warning(
+                                "SIDE_ENTRY_FAILED item_id=%s address=%r reason=%s",
+                                item_id,
+                                addr,
+                                side_reason,
+                            )
+                            notes_parts.append(f"front_left=hoppet (side entry feilet: {side_reason})")
+                            notes_parts.append(f"front_right=hoppet (side entry feilet: {side_reason})")
                     finally:
                         side_page.close()
             with step_timer(log, "api_complete_item", item_id=item_id):
