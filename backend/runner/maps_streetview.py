@@ -150,22 +150,38 @@ def _try_click_street_view_entry(page: Page) -> bool:
 
 
 def _try_click_first_thumbnail(page: Page) -> bool:
-    candidates = (
-        '[aria-label*="bilder" i] button img',
-        '[aria-label*="photos" i] button img',
-        '[aria-label*="bilder" i] a img',
-        '[aria-label*="photos" i] a img',
-        '[data-section-id*="photos" i] button img',
-        '[data-section-id*="photos" i] a img',
-    )
-    for sel in candidates:
-        try:
-            loc = page.locator(sel).first
-            if loc.count() and loc.is_visible(timeout=2500):
-                loc.click(timeout=5000)
+    try:
+        loc = page.locator('button[jsaction="pane.wfvdle7.heroHeaderImage"]').first
+        if loc.count() and loc.is_visible(timeout=2500):
+            loc.click(timeout=5000)
+            log.info("THUMBNAIL_FORCED_CLICK_SELECTOR %s", 'button[jsaction="pane.wfvdle7.heroHeaderImage"]')
+            return True
+    except Exception:
+        pass
+    try:
+        loc = page.locator('button:has(img[src*="streetviewpixels-pa.googleapis.com/v1/thumbnail"])').first
+        if loc.count() and loc.is_visible(timeout=2500):
+            loc.click(timeout=5000)
+            log.info(
+                "THUMBNAIL_FORCED_CLICK_SELECTOR %s",
+                'button:has(img[src*="streetviewpixels-pa.googleapis.com/v1/thumbnail"])',
+            )
+            return True
+    except Exception:
+        pass
+    try:
+        img = page.locator('img[src*="streetviewpixels-pa.googleapis.com/v1/thumbnail"]').first
+        if img.count() and img.is_visible(timeout=2500):
+            btn = img.locator("xpath=ancestor::button[1]")
+            if btn.count() and btn.first.is_visible(timeout=2500):
+                btn.first.click(timeout=5000)
+                log.info(
+                    "THUMBNAIL_FORCED_CLICK_SELECTOR %s",
+                    'img[src*="streetviewpixels-pa.googleapis.com/v1/thumbnail"] -> ancestor::button[1]',
+                )
                 return True
-        except Exception:
-            continue
+    except Exception:
+        pass
     return False
 
 
