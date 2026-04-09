@@ -5,7 +5,7 @@ export const API_BASE =
 
 /** Same-origin URL; proxy via app/api/files/[...path]/route.ts. */
 export function fileUrl(imageId: number, kind: "original" | "evidence") {
-  return `/api/files/image/${imageId}/${kind}`;
+  return `${API_BASE}/api/files/image/${imageId}/${kind}`;
 }
 
 export async function apiGet<T>(path: string): Promise<T> {
