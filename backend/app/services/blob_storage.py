@@ -25,9 +25,15 @@ def r2_object_key(stored: str) -> str:
 
 
 def r2_enabled() -> bool:
-    return settings.storage_backend.strip().lower() == "r2" and bool(
+    has_r2_creds = bool(
         settings.r2_bucket_name and settings.r2_access_key_id and settings.r2_secret_access_key
     )
+    if not has_r2_creds:
+        return False
+    backend = settings.storage_backend.strip().lower()
+    # Prefer explicit r2, but auto-enable when R2 is configured to avoid
+    # writing ephemeral local paths in production after deploy/restart.
+    return backend == "r2" or backend == "" or backend == "local"
 
 
 def _s3_client():
