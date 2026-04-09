@@ -266,3 +266,112 @@ def image_predictions(image_id: int, db: Session = Depends(get_db)):
         .order_by(models.Prediction.created_at.desc())
         .all()
     )
+
+
+@router.post("/{image_id}/send-to-review")
+def send_image_to_review(image_id: int, db: Session = Depends(get_db)):
+    img = db.get(models.ImageAsset, image_id)
+    if not img:
+        raise HTTPException(404, "Bilde ikke funnet")
+
+    pred = (
+        db.query(models.Prediction)
+        .filter(models.Prediction.image_id == img.id)
+        .order_by(models.Prediction.created_at.desc())
+        .first()
+    )
+    if pred is None:
+        mv = _active_model(db)
+        pred = models.Prediction(
+            image_id=img.id,
+            model_version_id=mv.id,
+            predicted_status=models.ReviewStatus.UKLART.value,
+            confidence=0,
+            bbox_json=None,
+            rationale="Sendt tilbake fra bibliotek for ny merking",
+            needs_review=True,
+            review_completed=False,
+        )
+        db.add(pred)
+        db.flush()
+    else:
+        rev = db.query(models.ReviewDecision).filter_by(prediction_id=pred.id).first()
+        if rev:
+            db.delete(rev)
+        pred.review_completed = False
+        pred.needs_review = True
+        pred.claimed_by = None
+        pred.claimed_at = None
+
+    refresh_prediction_priority(db, pred)
+    db.commit()
+    return {"ok": True, "image_id": img.id, "prediction_id": pred.id}
+
+
+@router.delete("/{image_id}")
+def delete_library_image(image_id: int, db: Session = Depends(get_db)):
+    img = db.get(models.ImageAsset, image_id)
+    if not img:
+        raise HTTPException(404, "Bilde ikke funnet")
+
+    pred_rows = (
+        db.query(models.Prediction.id)
+        .filter(models.Prediction.image_id == img.id)
+        .all()
+    )
+    pred_ids = [int(r[0]) for r in pred_rows]
+
+    in_training_from_image = (
+        db.query(models.TrainingExample.id)
+        .filter(models.TrainingExample.image_id == img.id)
+        .first()
+    )
+    in_training_from_prediction = (
+        db.query(models.TrainingExample.id)
+        .filter(models.TrainingExample.source_prediction_id.in_(pred_ids))
+        .first()
+        if pred_ids
+        else None
+    )
+    in_library = (
+        db.query(models.TrainingLibraryEntry.id)
+        .filter(models.TrainingLibraryEntry.image_id == img.id)
+        .first()
+    )
+    if in_training_from_image or in_training_from_prediction or in_library:
+        raise HTTPException(
+            409,
+            "Bildet brukes i treningsdata/eksempelbibliotek og kan ikke slettes trygt.",
+        )
+
+    if pred_ids:
+        (
+            db.query(models.DetectionHit)
+            .filter(models.DetectionHit.prediction_id.in_(pred_ids))
+            .update({models.DetectionHit.prediction_id: None}, synchronize_session=False)
+        )
+        (
+            db.query(models.ReviewDecision)
+            .filter(models.ReviewDecision.prediction_id.in_(pred_ids))
+            .delete(synchronize_session=False)
+        )
+        (
+            db.query(models.Prediction)
+            .filter(models.Prediction.id.in_(pred_ids))
+            .delete(synchronize_session=False)
+        )
+
+    (
+        db.query(models.DetectionHit)
+        .filter(models.DetectionHit.image_id == img.id)
+        .update({models.DetectionHit.image_id: None}, synchronize_session=False)
+    )
+
+    if img.address_id:
+        addr = db.get(models.AddressRecord, img.address_id)
+        if addr and addr.selected_image_id == img.id:
+            addr.selected_image_id = None
+
+    db.delete(img)
+    db.commit()
+    return {"ok": True, "deleted_image_id": image_id}

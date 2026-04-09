@@ -38,6 +38,49 @@ export default function LibraryGallery() {
   const [rows, setRows] = useState<ImageRow[]>([]);
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(true);
+  const [busyById, setBusyById] = useState<Record<number, string>>({});
+
+  async function onDelete(imageId: number) {
+    if (!window.confirm("Slette dette bildet fra biblioteket?")) return;
+    setBusyById((prev) => ({ ...prev, [imageId]: "delete" }));
+    setErr("");
+    try {
+      const r = await fetch(`${API_BASE}/api/images/${imageId}`, { method: "DELETE" });
+      if (!r.ok) {
+        const t = await r.text();
+        throw new Error(t || "Sletting feilet");
+      }
+      setRows((prev) => prev.filter((x) => x.id !== imageId));
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Sletting feilet");
+    } finally {
+      setBusyById((prev) => {
+        const next = { ...prev };
+        delete next[imageId];
+        return next;
+      });
+    }
+  }
+
+  async function onEdit(imageId: number) {
+    setBusyById((prev) => ({ ...prev, [imageId]: "edit" }));
+    setErr("");
+    try {
+      const r = await fetch(`${API_BASE}/api/images/${imageId}/send-to-review`, { method: "POST" });
+      if (!r.ok) {
+        const t = await r.text();
+        throw new Error(t || "Kunne ikke sende tilbake til review");
+      }
+      window.location.href = `/review?image_ids=${encodeURIComponent(String(imageId))}`;
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Kunne ikke sende tilbake til review");
+      setBusyById((prev) => {
+        const next = { ...prev };
+        delete next[imageId];
+        return next;
+      });
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -127,6 +170,22 @@ export default function LibraryGallery() {
               {img.is_temporary_candidate && (
                 <span style={{ fontSize: 11, color: "var(--warn)" }}> Kandidat</span>
               )}
+              <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
+                <button
+                  type="button"
+                  onClick={() => void onDelete(img.id)}
+                  disabled={Boolean(busyById[img.id])}
+                >
+                  Slett
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void onEdit(img.id)}
+                  disabled={Boolean(busyById[img.id])}
+                >
+                  Rediger
+                </button>
+              </div>
             </div>
           );
         })}
