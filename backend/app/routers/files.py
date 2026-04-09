@@ -5,6 +5,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
 from app import models
+from app.config import settings
 from app.database import get_db
 from app.services.blob_storage import is_r2_ref, stream_r2_object
 
@@ -24,8 +25,13 @@ def _safe_image(path: str | None) -> Path:
     if not path:
         raise HTTPException(404)
     p = resolve_stored_path(path)
-    if not p.is_file():
-        raise HTTPException(404)
+    if p.is_file():
+        return p
+    # Legacy/deploy-safe fallback: use filename under current UPLOAD_DIR.
+    fallback = (Path(settings.upload_dir) / Path(path).name).resolve()
+    if fallback.is_file():
+        return fallback
+    raise HTTPException(404)
     return p
 
 
