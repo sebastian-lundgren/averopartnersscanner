@@ -14,6 +14,7 @@ from app.services.bbox_multi import (
 )
 
 router = APIRouter(prefix="/api/reviews", tags=["reviews"])
+_MAX_QUEUE_WINDOW = 1000
 
 
 def _training_bbox_list(body: schemas.ReviewSubmit, pred: models.Prediction) -> list[dict[str, float]]:
@@ -93,11 +94,18 @@ def queue_stats(db: Session = Depends(get_db)):
 
 @router.get("/queue", response_model=list[schemas.QueueItemOut])
 def review_queue(
+    skip: int = 0,
     limit: int = 50,
     annotator_id: str | None = None,
     image_ids: str | None = None,
     db: Session = Depends(get_db),
 ):
+    skip = max(0, int(skip))
+    limit = max(1, int(limit))
+    if skip >= _MAX_QUEUE_WINDOW:
+        return []
+    limit = min(limit, _MAX_QUEUE_WINDOW - skip)
+
     id_filter: list[int] | None = None
     if image_ids and image_ids.strip():
         id_filter = [int(x.strip()) for x in image_ids.split(",") if x.strip().isdigit()]
@@ -117,7 +125,12 @@ def review_queue(
     )
     if id_filter is not None:
         q = q.filter(models.Prediction.image_id.in_(id_filter))
-    preds = q.order_by(models.Prediction.priority_score.desc(), models.Prediction.created_at.asc()).limit(limit).all()
+    preds = (
+        q.order_by(models.Prediction.priority_score.desc(), models.Prediction.created_at.asc())
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
     out: list[schemas.QueueItemOut] = []
     for p in preds:
         out.append(

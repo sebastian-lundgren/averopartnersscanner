@@ -27,12 +27,17 @@ type Img = { id: number; original_filename: string };
 type QueueItem = { prediction: Pred; image: Img };
 
 const ANNOTATOR_LS = "annotator_display_name";
+const REVIEW_PAGE_SIZE = 100;
+const REVIEW_TOTAL_CAP = 1000;
 
 function ReviewPageInner() {
   const searchParams = useSearchParams();
   const imageIdsFilter = (searchParams.get("image_ids") || "").trim();
 
   const [queue, setQueue] = useState<QueueItem[]>([]);
+  const [queuePage, setQueuePage] = useState(0);
+  const [queueHasMore, setQueueHasMore] = useState(false);
+  const [loadingMoreQueue, setLoadingMoreQueue] = useState(false);
   const [idx, setIdx] = useState(0);
   const [annotationLabel, setAnnotationLabel] = useState<AnnotationLabel>("unclear");
   const [comment, setComment] = useState("");
@@ -79,7 +84,7 @@ function ReviewPageInner() {
       const imgQs =
         imageIdsFilter !== "" ? `&image_ids=${encodeURIComponent(imageIdsFilter)}` : "";
       const [r, st] = await Promise.all([
-        fetch(`${API_BASE}/api/reviews/queue?limit=100${qs}${imgQs}`),
+        fetch(`${API_BASE}/api/reviews/queue?skip=0&limit=${REVIEW_PAGE_SIZE}${qs}${imgQs}`),
         fetch(`${API_BASE}/api/reviews/queue-stats`),
       ]);
       const raw = await r.json();
@@ -106,7 +111,9 @@ function ReviewPageInner() {
         return;
       }
       const data = raw as QueueItem[];
-      setQueue(data);
+      setQueue(data.slice(0, REVIEW_TOTAL_CAP));
+      setQueuePage(0);
+      setQueueHasMore(data.length === REVIEW_PAGE_SIZE && data.length < REVIEW_TOTAL_CAP);
       setIdx(0);
       const firstStatus = data[0]?.prediction?.predicted_status;
       if (firstStatus) setAnnotationLabel(defaultAnnotationFromPredicted(firstStatus));
@@ -116,6 +123,36 @@ function ReviewPageInner() {
       setMsg(e instanceof Error ? e.message : "Kunne ikke hente kø");
     }
   }, [annotatorId, imageIdsFilter]);
+
+  const loadMoreQueue = useCallback(async () => {
+    if (loadingMoreQueue || !queueHasMore || queue.length >= REVIEW_TOTAL_CAP) return;
+    setLoadingMoreQueue(true);
+    setMsg("");
+    try {
+      const qs =
+        annotatorId.trim() !== ""
+          ? `&annotator_id=${encodeURIComponent(annotatorId.trim())}`
+          : "";
+      const imgQs =
+        imageIdsFilter !== "" ? `&image_ids=${encodeURIComponent(imageIdsFilter)}` : "";
+      const nextPage = queuePage + 1;
+      const skip = nextPage * REVIEW_PAGE_SIZE;
+      const remaining = REVIEW_TOTAL_CAP - queue.length;
+      const limit = Math.min(REVIEW_PAGE_SIZE, remaining);
+      const r = await fetch(`${API_BASE}/api/reviews/queue?skip=${skip}&limit=${limit}${qs}${imgQs}`);
+      const raw = await r.json();
+      if (!r.ok) throw new Error(typeof raw?.detail === "string" ? raw.detail : JSON.stringify(raw));
+      if (!Array.isArray(raw)) throw new Error("Uventet svar fra API (ikke en liste).");
+      const data = raw as QueueItem[];
+      setQueue((prev) => [...prev, ...data].slice(0, REVIEW_TOTAL_CAP));
+      setQueuePage(nextPage);
+      setQueueHasMore(data.length === limit && skip + data.length < REVIEW_TOTAL_CAP);
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : "Kunne ikke hente flere i kø");
+    } finally {
+      setLoadingMoreQueue(false);
+    }
+  }, [annotatorId, imageIdsFilter, loadingMoreQueue, queueHasMore, queuePage, queue.length]);
 
   useEffect(() => {
     load();
@@ -569,6 +606,11 @@ function ReviewPageInner() {
             <span className="muted" style={{ alignSelf: "center" }}>
               {idx + 1} / {queue.length}
             </span>
+            {queueHasMore && (
+              <button type="button" disabled={loadingMoreQueue} onClick={() => void loadMoreQueue()}>
+                {loadingMoreQueue ? "Laster ..." : "Last flere"}
+              </button>
+            )}
           </p>
           {msg && <p>{msg}</p>}
         </div>

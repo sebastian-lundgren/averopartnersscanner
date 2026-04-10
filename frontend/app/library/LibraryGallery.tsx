@@ -21,23 +21,27 @@ const HOME_FILTERS: { param: string; label: string }[] = [
   { param: "trenger_manuell", label: "Har ikke alarm" },
   { param: "uklart", label: "Uklart" },
 ];
+const PAGE_SIZE = 25;
+const TOTAL_CAP = 1000;
+const TOTAL_PAGES = Math.ceil(TOTAL_CAP / PAGE_SIZE);
 
 export default function LibraryGallery() {
   const searchParams = useSearchParams();
   const raw = (searchParams.get("home_status") || "all").trim().toLowerCase();
   const homeStatus = HOME_FILTERS.some((f) => f.param === raw) ? raw : "all";
 
-  const qs = useMemo(
+  const qsBase = useMemo(
     () =>
       homeStatus === "all"
-        ? "limit=200"
-        : `limit=200&home_status=${encodeURIComponent(homeStatus)}`,
+        ? `limit=${PAGE_SIZE}`
+        : `limit=${PAGE_SIZE}&home_status=${encodeURIComponent(homeStatus)}`,
     [homeStatus],
   );
 
   const [rows, setRows] = useState<ImageRow[]>([]);
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(1);
   const [busyById, setBusyById] = useState<Record<number, string>>({});
 
   async function onDelete(imageId: number) {
@@ -83,10 +87,15 @@ export default function LibraryGallery() {
   }
 
   useEffect(() => {
+    setPage(1);
+  }, [homeStatus]);
+
+  useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setErr("");
-    const url = `${API_BASE}/api/images/library?${qs}`;
+    const skip = (page - 1) * PAGE_SIZE;
+    const url = `${API_BASE}/api/images/library?${qsBase}&skip=${skip}`;
     void (async () => {
       try {
         const r = await fetch(url, { cache: "no-store" });
@@ -96,7 +105,10 @@ export default function LibraryGallery() {
           return;
         }
         const data = (await r.json()) as ImageRow[];
-        if (!cancelled) setRows(Array.isArray(data) ? data : []);
+        if (!cancelled) {
+          const list = Array.isArray(data) ? data : [];
+          setRows(list);
+        }
       } catch (e) {
         if (!cancelled) setErr(e instanceof Error ? e.message : "Feil");
       } finally {
@@ -106,7 +118,7 @@ export default function LibraryGallery() {
     return () => {
       cancelled = true;
     };
-  }, [qs]);
+  }, [qsBase, page]);
 
   return (
     <>
@@ -190,6 +202,21 @@ export default function LibraryGallery() {
           );
         })}
       </div>
+      <p style={{ marginTop: 12, display: "flex", gap: 8, alignItems: "center" }}>
+        <button type="button" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>
+          Forrige
+        </button>
+        <span className="muted">
+          Side {page} av {TOTAL_PAGES}
+        </span>
+        <button
+          type="button"
+          disabled={page >= TOTAL_PAGES || rows.length < PAGE_SIZE}
+          onClick={() => setPage((p) => Math.min(TOTAL_PAGES, p + 1))}
+        >
+          Neste
+        </button>
+      </p>
     </>
   );
 }

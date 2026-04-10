@@ -19,6 +19,7 @@ from app.services.yolo_service import run_yolov8_on_image
 
 router = APIRouter(prefix="/api/images", tags=["images"])
 log = logging.getLogger(__name__)
+_MAX_LIST_WINDOW = 1000
 
 
 def _yolo_scan_model_version(db: Session) -> models.ModelVersion | None:
@@ -187,6 +188,12 @@ def library(
     ),
     db: Session = Depends(get_db),
 ):
+    skip = max(0, int(skip))
+    limit = max(1, int(limit))
+    if skip >= _MAX_LIST_WINDOW:
+        return []
+    limit = min(limit, _MAX_LIST_WINDOW - skip)
+
     hs = (home_status or "all").strip().lower()
     if hs not in ("all", "skilt_funnet", "trenger_manuell", "uklart"):
         raise HTTPException(
