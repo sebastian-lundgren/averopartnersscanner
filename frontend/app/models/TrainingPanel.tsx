@@ -12,7 +12,7 @@ type TrainJob = {
   finished_at: string | null;
   error_message: string | null;
   config_json: Record<string, unknown> | null;
-  export_counts_json: Record<string, number> | null;
+  export_counts_json: Record<string, unknown> | null;
   metrics_json: Record<string, number> | null;
   new_annotations_snapshot: number | null;
   candidate_model_version_id: number | null;
@@ -41,6 +41,8 @@ export default function TrainingPanel({ versions }: { versions: Mv[] }) {
   const [auto, setAuto] = useState<AutoStatus | null>(null);
   const [msg, setMsg] = useState("");
   const [loading, setLoading] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState<Record<number, boolean>>({});
+  const [usedOpen, setUsedOpen] = useState<Record<number, boolean>>({});
 
   const refresh = useCallback(async () => {
     try {
@@ -98,6 +100,22 @@ export default function TrainingPanel({ versions }: { versions: Mv[] }) {
     }
   };
 
+  const retryJob = async (jobId: number) => {
+    setLoading(true);
+    setMsg("");
+    try {
+      const r = await fetch(`${API_BASE}/api/train-jobs/${jobId}/retry`, { method: "POST" });
+      const raw = await r.json();
+      if (!r.ok) throw new Error(typeof raw?.detail === "string" ? raw.detail : JSON.stringify(raw));
+      setMsg(`Jobb #${(raw as TrainJob).id} startet (retry av #${jobId})`);
+      await refresh();
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : "Feil");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const activeJob = jobs.find((j) => j.status === "running" || j.status === "queued");
   const trainingBusy = Boolean(auto?.train_job_busy || activeJob);
 
@@ -144,11 +162,36 @@ export default function TrainingPanel({ versions }: { versions: Mv[] }) {
         </button>
       </p>
       {msg && <p>{msg}</p>}
+      <p className="muted" style={{ fontSize: 13 }}>
+        Kjør igjen bruker samme treningskonfigurasjon når tilgjengelig, men trener alltid på dagens eksporterte
+        treningsdata (ikke et historisk snapshot per jobb).
+      </p>
       <h3 style={{ fontSize: "1rem" }}>Treningsjobber</h3>
       <ul style={{ fontSize: 13, paddingLeft: "1.2rem" }}>
         {jobs.map((job) => (
           <li key={job.id} style={{ marginBottom: 6 }}>
             <strong>#{job.id}</strong> {job.status} ({job.trigger}) — opprettet {job.created_at}
+            <span>
+              {" "}
+              ·{" "}
+              <button type="button" className="secondary" disabled={loading || trainingBusy} onClick={() => void retryJob(job.id)}>
+                Kjør igjen
+              </button>{" "}
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => setUsedOpen((prev) => ({ ...prev, [job.id]: !prev[job.id] }))}
+              >
+                {usedOpen[job.id] ? "Skjul bilder brukt" : "Vis bilder brukt"}
+              </button>{" "}
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => setDetailsOpen((prev) => ({ ...prev, [job.id]: !prev[job.id] }))}
+              >
+                {detailsOpen[job.id] ? "Skjul detaljer" : "Vis feil / detaljer"}
+              </button>
+            </span>
             {job.metrics_json && (
               <span className="muted">
                 {" "}
@@ -159,8 +202,30 @@ export default function TrainingPanel({ versions }: { versions: Mv[] }) {
               </span>
             )}
             {job.activated_new_model && <span className="muted"> · aktivert som inferensmodell</span>}
-            {job.error_message && (
-              <div style={{ color: "var(--err, #c00)", whiteSpace: "pre-wrap" }}>{job.error_message}</div>
+            {usedOpen[job.id] && (
+              <div className="muted" style={{ marginTop: 6, whiteSpace: "pre-wrap" }}>
+                {Array.isArray(job.export_counts_json?.used_image_ids) ? (
+                  <div>Bilder brukt (image_id): {(job.export_counts_json.used_image_ids as unknown[]).join(", ") || "—"}</div>
+                ) : (
+                  <div>Eksakt bildeliste finnes ikke for denne eldre jobben.</div>
+                )}
+                {Array.isArray(job.export_counts_json?.used_training_example_ids) ? (
+                  <div>
+                    TrainingExample brukt: {(job.export_counts_json.used_training_example_ids as unknown[]).join(", ") || "—"}
+                  </div>
+                ) : null}
+              </div>
+            )}
+            {detailsOpen[job.id] && (
+              <div className="muted" style={{ marginTop: 6, whiteSpace: "pre-wrap" }}>
+                {job.error_message ? (
+                  <div style={{ color: "var(--err, #c00)" }}>{job.error_message}</div>
+                ) : (
+                  <div>Ingen feilmelding registrert.</div>
+                )}
+                <div>Export counts: {job.export_counts_json ? JSON.stringify(job.export_counts_json) : "—"}</div>
+                <div>Config: {job.config_json ? JSON.stringify(job.config_json) : "—"}</div>
+              </div>
             )}
           </li>
         ))}

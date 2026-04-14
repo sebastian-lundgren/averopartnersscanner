@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app import models
 from app.services.blob_storage import is_r2_ref, materialize_local_path
-from app.services.path_resolve import resolve_stored_path
+from app.services.path_resolve import resolve_evidence_path, resolve_stored_path
 from app.services.bbox_multi import is_valid_box, normalize_box
 from app.services.yolo_service import bbox_to_yolo_line
 
@@ -33,12 +33,66 @@ def _move_one_example_between_splits(export_root: Path, *, src: str, dst: str) -
     return False
 
 
+def _tags_dict(raw: object) -> dict:
+    return raw if isinstance(raw, dict) else {}
+
+
+def _annotation_label(tags: dict) -> str:
+    ann = str(tags.get("annotation_label") or tags.get("label") or "").strip().lower()
+    mapping = {
+        "alarm_sign": "alarm_sign",
+        "skilt_funnet": "alarm_sign",
+        "not_alarm_sign": "not_alarm_sign",
+        "trenger_manuell": "not_alarm_sign",
+        "unclear": "unclear",
+        "uklart": "unclear",
+    }
+    return mapping.get(ann, "")
+
+
+def _extract_valid_bboxes(tags: dict) -> list[dict[str, float]]:
+    out: list[dict[str, float]] = []
+    candidates_multi = [tags.get("bboxes_norm"), tags.get("annotation_bboxes_json"), tags.get("boxes")]
+    for cand in candidates_multi:
+        if isinstance(cand, list):
+            for b in cand:
+                if isinstance(b, dict) and is_valid_box(b):
+                    out.append(normalize_box(b))
+    for cand in (
+        tags.get("bbox_norm"),
+        tags.get("annotation_bbox_json"),
+        tags.get("bbox_json"),
+        tags.get("bbox"),
+    ):
+        if isinstance(cand, dict) and is_valid_box(cand):
+            out.append(normalize_box(cand))
+    dedup: list[dict[str, float]] = []
+    seen: set[tuple[float, float, float, float]] = set()
+    for b in out:
+        key = (b["x"], b["y"], b["w"], b["h"])
+        if key in seen:
+            continue
+        seen.add(key)
+        dedup.append(b)
+    return dedup
+
+
+def _resolve_best_local_image(img: models.ImageAsset) -> Path | None:
+    src_img = resolve_stored_path(img.stored_path)
+    if src_img.is_file():
+        return src_img
+    ev = resolve_evidence_path(img.evidence_crop_path)
+    if ev and ev.is_file():
+        return ev
+    return None
+
+
 def write_yolo_dataset(
     db: Session,
     export_root: Path,
     *,
     clear_first: bool = False,
-) -> dict[str, int | dict[str, int]]:
+) -> dict[str, object]:
     """
     Kopier bilder og .txt-labels for train/val. rejected: kun bilde i rejected/ (uten label).
     """
@@ -72,7 +126,8 @@ def write_yolo_dataset(
         skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
 
     for te in training_rows:
-        if not te.tags_json:
+        tags = _tags_dict(te.tags_json)
+        if not tags:
             _skip("missing_tags_json")
             continue
         examples_with_tags += 1
@@ -80,23 +135,30 @@ def write_yolo_dataset(
         if not img:
             _skip("missing_image_asset")
             continue
-        tags = te.tags_json
-        ann = str(tags.get("annotation_label") or "")
-        bbox = tags.get("bbox_norm")
-        bboxes_multi = tags.get("bboxes_norm")
+        ann = _annotation_label(tags)
+        bboxes = _extract_valid_bboxes(tags)
         if ann in valid_labels:
             examples_with_valid_label += 1
-        has_valid_bbox = False
-        if isinstance(bboxes_multi, list) and bboxes_multi:
-            has_valid_bbox = any(isinstance(b, dict) and is_valid_box(b) for b in bboxes_multi)
-        elif isinstance(bbox, dict) and is_valid_box(bbox):
-            has_valid_bbox = True
-        if has_valid_bbox:
+        if bboxes:
             examples_with_valid_bbox += 1
+        # Konsekvent regel: "unclear" tas ikke med i YOLO-trening.
+        if ann == "unclear":
+            _skip("excluded_unclear_label")
+            continue
+        if ann == "alarm_sign" and not bboxes:
+            _skip("alarm_sign_without_valid_bbox")
+            continue
+        if ann not in {"alarm_sign", "not_alarm_sign"}:
+            _skip("invalid_annotation_label")
+            continue
         split = split_by_te_id.get(te.id)
-        if split is None:
+        if split not in {"train", "val", "rejected"}:
             split = "val" if te.id % 5 == 0 else "train"
-            db.add(models.YoloDatasetEntry(training_example_id=te.id, split=split))
+            row = db.query(models.YoloDatasetEntry).filter_by(training_example_id=te.id).first()
+            if row:
+                row.split = split
+            else:
+                db.add(models.YoloDatasetEntry(training_example_id=te.id, split=split))
             split_by_te_id[te.id] = split
             examples_backfilled_split += 1
         else:
@@ -111,18 +173,22 @@ def write_yolo_dataset(
         seen_stem.add(stem)
         if is_r2_ref(img.stored_path):
             local_src, tmp_del = materialize_local_path(img.stored_path, suffix=".yolo")
+            tmp_local_src = local_src
             try:
                 if not local_src.is_file():
-                    _skip("missing_source_image_r2")
-                    continue
+                    fallback = _resolve_best_local_image(img)
+                    if fallback is None:
+                        _skip("missing_source_image_r2")
+                        continue
+                    local_src = fallback
                 ext = local_src.suffix or ".jpg"
                 dst_img = export_root / "images" / split / f"{stem}{ext}"
                 shutil.copy2(local_src, dst_img)
             finally:
                 if tmp_del:
-                    local_src.unlink(missing_ok=True)
+                    tmp_local_src.unlink(missing_ok=True)
         else:
-            src_img = resolve_stored_path(img.stored_path)
+            src_img = _resolve_best_local_image(img)
             if not src_img.is_file():
                 _skip("missing_source_image_local")
                 continue
@@ -137,14 +203,8 @@ def write_yolo_dataset(
         label_path = export_root / "labels" / split / f"{stem}.txt"
         lines: list[str] = []
         if ann == "alarm_sign":
-            if isinstance(bboxes_multi, list) and bboxes_multi:
-                for b in bboxes_multi:
-                    if isinstance(b, dict) and is_valid_box(b):
-                        lines.append(bbox_to_yolo_line(0, normalize_box(b)))
-            elif isinstance(bbox, dict) and is_valid_box(bbox):
-                lines.append(bbox_to_yolo_line(0, normalize_box(bbox)))
-            else:
-                _skip("alarm_sign_without_valid_bbox")
+            for b in bboxes:
+                lines.append(bbox_to_yolo_line(0, b))
         label_path.write_text("".join(lines), encoding="utf-8")
         counts[split] = int(counts[split]) + 1
         if split == "train":
@@ -194,6 +254,12 @@ def write_yolo_dataset(
     counts["training_examples_backfilled_to_yolo_dataset_entry"] = examples_backfilled_split
     counts["written_to_train"] = written_train
     counts["written_to_val"] = written_val
+    counts["used_training_example_ids"] = sorted(
+        int(p.stem.split("_")[-1]) for p in (export_root / "labels" / "train").glob("img_*_*.txt")
+    ) + sorted(int(p.stem.split("_")[-1]) for p in (export_root / "labels" / "val").glob("img_*_*.txt"))
+    counts["used_image_ids"] = sorted(
+        int(p.stem.split("_")[1]) for p in (export_root / "labels" / "train").glob("img_*_*.txt")
+    ) + sorted(int(p.stem.split("_")[1]) for p in (export_root / "labels" / "val").glob("img_*_*.txt"))
     counts["skipped_total"] = sum(skip_reasons.values())
     counts["skipped_reasons"] = skip_reasons
     return counts
