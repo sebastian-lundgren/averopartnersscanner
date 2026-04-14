@@ -27,6 +27,12 @@ METRIC_KEY_ALIASES = {
     "recall": "recall",
 }
 
+_YOLO_IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp", ".dng", ".mpo", ".pfm", ".heic")
+
+
+def _count_images_in_dir(path: Path) -> int:
+    return sum(1 for f in path.iterdir() if f.is_file() and f.suffix.lower() in _YOLO_IMAGE_EXTS)
+
 
 def count_new_annotations_since_checkpoint(db: Session) -> int:
     cp = settings_store.get_train_checkpoint_te_id(db)
@@ -174,6 +180,20 @@ def run_train_job_sync(job_id: int) -> None:
         yaml = root / "dataset.yaml"
         if not yaml.is_file():
             raise ValueError("dataset.yaml ble ikke opprettet")
+        train_dir = root / "images" / "train"
+        val_dir = root / "images" / "val"
+        train_files = _count_images_in_dir(train_dir) if train_dir.is_dir() else 0
+        val_files = _count_images_in_dir(val_dir) if val_dir.is_dir() else 0
+        if train_files == 0 or val_files == 0:
+            total_files = train_files + val_files
+            if total_files < 2:
+                raise ValueError(
+                    f"For få brukbare YOLO-bilder totalt ({total_files}) til å lage både train og val."
+                )
+            raise ValueError(
+                f"Ugyldig YOLO-datasett: images/train={train_files}, images/val={val_files}. "
+                "Sett gyldig train/val-split før trening."
+            )
 
         try:
             from ultralytics import YOLO

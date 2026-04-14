@@ -15,6 +15,24 @@ from app.services.bbox_multi import is_valid_box, normalize_box
 from app.services.yolo_service import bbox_to_yolo_line
 
 
+def _move_one_example_between_splits(export_root: Path, *, src: str, dst: str) -> bool:
+    src_img_dir = export_root / "images" / src
+    dst_img_dir = export_root / "images" / dst
+    src_lbl_dir = export_root / "labels" / src
+    dst_lbl_dir = export_root / "labels" / dst
+    for img in src_img_dir.glob("*"):
+        if not img.is_file():
+            continue
+        stem = img.stem
+        src_lbl = src_lbl_dir / f"{stem}.txt"
+        if not src_lbl.is_file():
+            continue
+        img.rename(dst_img_dir / img.name)
+        src_lbl.rename(dst_lbl_dir / src_lbl.name)
+        return True
+    return False
+
+
 def write_yolo_dataset(
     db: Session,
     export_root: Path,
@@ -90,6 +108,16 @@ def write_yolo_dataset(
                 lines.append(bbox_to_yolo_line(0, normalize_box(bbox)))
         label_path.write_text("".join(lines), encoding="utf-8")
         counts[split] += 1
+
+    # Auto-reparer ugyldig split i eksporten (minst ett eksempel i både train og val).
+    if counts["train"] > 1 and counts["val"] == 0:
+        if _move_one_example_between_splits(export_root, src="train", dst="val"):
+            counts["train"] -= 1
+            counts["val"] += 1
+    elif counts["val"] > 1 and counts["train"] == 0:
+        if _move_one_example_between_splits(export_root, src="val", dst="train"):
+            counts["val"] -= 1
+            counts["train"] += 1
 
     # dataset.yaml: bruk eksplisitte absolutte train/val-mapper. Ultralytics 8.x kan fortsatt
     # slå sammen «path» + relative train/val feil (cwd), som ga …/backend/images/val.
