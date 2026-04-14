@@ -53,12 +53,13 @@ def write_yolo_dataset(
                     f.unlink()
 
     rows = db.query(models.YoloDatasetEntry).all()
+    split_by_te_id = {int(r.training_example_id): str(r.split) for r in rows}
+    training_rows = db.query(models.TrainingExample).all()
     counts = {"train": 0, "val": 0, "rejected": 0}
     seen_stem: set[str] = set()
 
-    for ent in rows:
-        te = db.get(models.TrainingExample, ent.training_example_id)
-        if not te or not te.tags_json:
+    for te in training_rows:
+        if not te.tags_json:
             continue
         img = db.get(models.ImageAsset, te.image_id)
         if not img:
@@ -67,7 +68,11 @@ def write_yolo_dataset(
         ann = str(tags.get("annotation_label") or "")
         bbox = tags.get("bbox_norm")
         bboxes_multi = tags.get("bboxes_norm")
-        split = ent.split
+        split = split_by_te_id.get(te.id)
+        if split is None:
+            split = "val" if te.id % 5 == 0 else "train"
+            db.add(models.YoloDatasetEntry(training_example_id=te.id, split=split))
+            split_by_te_id[te.id] = split
         if split not in counts:
             continue
         stem = f"img_{img.id}_{te.id}"
