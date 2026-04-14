@@ -184,6 +184,12 @@ def run_train_job_sync(job_id: int) -> None:
         val_dir = root / "images" / "val"
         train_files = _count_images_in_dir(train_dir) if train_dir.is_dir() else 0
         val_files = _count_images_in_dir(val_dir) if val_dir.is_dir() else 0
+        job.export_counts_json = {
+            **(job.export_counts_json or {}),
+            "train_files_on_disk": train_files,
+            "val_files_on_disk": val_files,
+        }
+        db.commit()
         if train_files == 0 or val_files == 0:
             total_files = train_files + val_files
             if total_files < 2:
