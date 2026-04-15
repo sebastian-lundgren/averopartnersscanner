@@ -14,6 +14,18 @@ from app.services.path_resolve import resolve_evidence_path, resolve_stored_path
 from app.services.bbox_multi import is_valid_box, normalize_box
 from app.services.yolo_service import bbox_to_yolo_line
 
+_KNOWN_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff", ".gif", ".heic"}
+_MIME_TO_EXT = {
+    "image/jpeg": ".jpg",
+    "image/jpg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+    "image/bmp": ".bmp",
+    "image/tiff": ".tiff",
+    "image/gif": ".gif",
+    "image/heic": ".heic",
+}
+
 
 def _move_one_example_between_splits(export_root: Path, *, src: str, dst: str) -> bool:
     src_img_dir = export_root / "images" / src
@@ -85,6 +97,19 @@ def _resolve_best_local_image(img: models.ImageAsset) -> Path | None:
     if ev and ev.is_file():
         return ev
     return None
+
+
+def _infer_export_image_ext(img: models.ImageAsset, src_path: Path | None = None) -> str:
+    cands = [
+        Path(str(img.original_filename or "")).suffix.lower(),
+        Path(str(img.evidence_crop_path or "")).suffix.lower(),
+        _MIME_TO_EXT.get(str(img.mime_type or "").strip().lower(), ""),
+        src_path.suffix.lower() if src_path else "",
+    ]
+    for ext in cands:
+        if ext in _KNOWN_IMAGE_EXTS:
+            return ext
+    return ".jpg"
 
 
 def write_yolo_dataset(
@@ -181,7 +206,7 @@ def write_yolo_dataset(
                         _skip("missing_source_image_r2")
                         continue
                     local_src = fallback
-                ext = local_src.suffix or ".jpg"
+                ext = _infer_export_image_ext(img, src_path=local_src)
                 dst_img = export_root / "images" / split / f"{stem}{ext}"
                 shutil.copy2(local_src, dst_img)
             finally:
@@ -192,7 +217,7 @@ def write_yolo_dataset(
             if src_img is None or not src_img.is_file():
                 _skip("missing_source_image_local")
                 continue
-            ext = src_img.suffix or ".jpg"
+            ext = _infer_export_image_ext(img, src_path=src_img)
             dst_img = export_root / "images" / split / f"{stem}{ext}"
             shutil.copy2(src_img, dst_img)
 
