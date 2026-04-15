@@ -189,7 +189,7 @@ def write_yolo_dataset(
                     tmp_local_src.unlink(missing_ok=True)
         else:
             src_img = _resolve_best_local_image(img)
-            if not src_img.is_file():
+            if src_img is None or not src_img.is_file():
                 _skip("missing_source_image_local")
                 continue
             ext = src_img.suffix or ".jpg"
