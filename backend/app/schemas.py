@@ -267,6 +267,8 @@ class TrainJobOut(BaseModel):
     metrics_json: dict[str, Any] | None
     cancel_requested: bool = False
     heartbeat_at: datetime | None = None
+    peak_rss_mb: float | None = None
+    last_rss_mb: float | None = None
     runner_kind: str | None = None
     external_job_id: str | None = None
     new_annotations_snapshot: int | None

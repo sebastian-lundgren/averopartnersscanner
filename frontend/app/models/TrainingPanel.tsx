@@ -16,6 +16,8 @@ type TrainJob = {
   metrics_json: Record<string, number> | null;
   cancel_requested?: boolean;
   heartbeat_at?: string | null;
+  peak_rss_mb?: number | null;
+  last_rss_mb?: number | null;
   runner_kind?: string | null;
   new_annotations_snapshot: number | null;
   candidate_model_version_id: number | null;
@@ -228,6 +230,8 @@ export default function TrainingPanel({ versions }: { versions: Mv[] }) {
                 ) : (
                   <div>Ingen feilmelding registrert.</div>
                 )}
+                <div>Peak RAM (RSS): {typeof job.peak_rss_mb === "number" ? `${job.peak_rss_mb.toFixed(2)} MB` : "—"}</div>
+                <div>Last RAM (RSS): {typeof job.last_rss_mb === "number" ? `${job.last_rss_mb.toFixed(2)} MB` : "—"}</div>
                 <div>Export counts: {job.export_counts_json ? JSON.stringify(job.export_counts_json) : "—"}</div>
                 <div>Config: {job.config_json ? JSON.stringify(job.config_json) : "—"}</div>
               </div>

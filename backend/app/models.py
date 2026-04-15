@@ -276,6 +276,8 @@ class TrainJob(Base):
     metrics_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False)
     heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    peak_rss_mb: Mapped[float | None] = mapped_column(Float, nullable=True)
+    last_rss_mb: Mapped[float | None] = mapped_column(Float, nullable=True)
     runner_kind: Mapped[str | None] = mapped_column(String(32), nullable=True)
     external_job_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     new_annotations_snapshot: Mapped[int | None] = mapped_column(Integer, nullable=True)
