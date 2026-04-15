@@ -25,6 +25,7 @@ METRIC_KEY_ALIASES = {
 
 _YOLO_IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp", ".dng", ".mpo", ".pfm", ".heic")
 TRAIN_HEARTBEAT_STALE_SECONDS = 7200
+TRAIN_STOPPING_STALE_SECONDS = 300
 
 
 def _count_images_in_dir(path: Path) -> int:
@@ -53,18 +54,29 @@ def has_active_train_job(db: Session) -> bool:
 
 
 def recover_stale_train_jobs(db: Session) -> int:
-    cutoff = datetime.utcnow() - timedelta(seconds=TRAIN_HEARTBEAT_STALE_SECONDS)
-    rows = (
-        db.query(models.TrainJob)
-        .filter(models.TrainJob.status == TrainJobStatus.RUNNING)
-        .filter((models.TrainJob.heartbeat_at.is_(None)) | (models.TrainJob.heartbeat_at < cutoff))
-        .all()
-    )
+    now = datetime.utcnow()
+    running_rows = db.query(models.TrainJob).filter(models.TrainJob.status == TrainJobStatus.RUNNING).all()
+    rows: list[models.TrainJob] = []
+    stale_running_cutoff = now - timedelta(seconds=TRAIN_HEARTBEAT_STALE_SECONDS)
+    stale_stopping_cutoff = now - timedelta(seconds=TRAIN_STOPPING_STALE_SECONDS)
+    for job in running_rows:
+        hb = job.heartbeat_at
+        if job.cancel_requested:
+            if hb is None or hb < stale_stopping_cutoff:
+                rows.append(job)
+        elif hb is None or hb < stale_running_cutoff:
+            rows.append(job)
     for job in rows:
-        job.status = TrainJobStatus.FAILED
-        job.finished_at = datetime.utcnow()
-        if not job.error_message:
-            job.error_message = "Treningsjobb mistet worker (stale heartbeat) og ble markert som feilet."
+        if job.cancel_requested:
+            job.status = TrainJobStatus.CANCELLED
+            job.finished_at = now
+            if not job.error_message:
+                job.error_message = "Stopp forespurt, men worker ga ingen heartbeat; jobben ble avbrutt."
+        else:
+            job.status = TrainJobStatus.FAILED
+            job.finished_at = now
+            if not job.error_message:
+                job.error_message = "Treningsjobb mistet worker (stale heartbeat) og ble markert som feilet."
     if rows:
         db.commit()
     return len(rows)
@@ -181,11 +193,18 @@ def signal_cancel_train_job(job_id: int) -> bool:
         db.close()
 
 
-def touch_train_job_heartbeat(db: Session, job_id: int) -> None:
+def touch_train_job_heartbeat(db: Session, job_id: int, *, min_interval_seconds: int = 0) -> None:
     job = db.get(models.TrainJob, job_id)
     if not job:
         return
-    job.heartbeat_at = datetime.utcnow()
+    now = datetime.utcnow()
+    if (
+        min_interval_seconds > 0
+        and job.heartbeat_at is not None
+        and (now - job.heartbeat_at).total_seconds() < min_interval_seconds
+    ):
+        return
+    job.heartbeat_at = now
     db.commit()
 
 
@@ -269,11 +288,17 @@ def run_train_job_sync(job_id: int) -> None:
         model = YOLO(base)
 
         def on_train_epoch_end(trainer):
-            touch_train_job_heartbeat(db, job_id)
+            touch_train_job_heartbeat(db, job_id, min_interval_seconds=10)
+            if _train_cancel_requested(db, job_id):
+                trainer.stop = True
+
+        def on_train_batch_end(trainer):
+            touch_train_job_heartbeat(db, job_id, min_interval_seconds=20)
             if _train_cancel_requested(db, job_id):
                 trainer.stop = True
 
         model.add_callback("on_train_epoch_end", on_train_epoch_end)
+        model.add_callback("on_train_batch_end", on_train_batch_end)
         train_kw: dict = {
             "data": str(yaml.resolve()),
             "epochs": int(cfg.get("epochs", settings.yolo_train_epochs)),
