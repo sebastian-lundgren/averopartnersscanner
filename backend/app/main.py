@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.database import init_db
+from app.database import SessionLocal, init_db
 from app.routers import (
     addresses,
     dashboard,
@@ -27,6 +27,7 @@ from app.routers import (
     yolo_admin,
 )
 from app.seed import seed_if_empty
+from app.services.train_pipeline import recover_stale_train_jobs
 
 
 def create_app() -> FastAPI:
@@ -50,6 +51,11 @@ def create_app() -> FastAPI:
     Path(settings.yolo_train_output_dir).mkdir(parents=True, exist_ok=True)
 
     init_db()
+    db = SessionLocal()
+    try:
+        recover_stale_train_jobs(db)
+    finally:
+        db.close()
     seed_if_empty()
 
     app.include_router(images.router)

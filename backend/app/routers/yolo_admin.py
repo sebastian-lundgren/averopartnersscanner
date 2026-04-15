@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app import models, schemas
 from app.config import settings
 from app.database import get_db
-from app.services.train_pipeline import create_train_job, has_active_train_job, start_train_job_thread
+from app.services.train_pipeline import create_train_job, has_active_train_job, recover_stale_train_jobs
 from app.services.yolo_export_files import write_yolo_dataset
 
 router = APIRouter(prefix="/api/yolo", tags=["yolo"])
@@ -50,6 +50,7 @@ def export_disk(clear: bool = False, db: Session = Depends(get_db)):
 @router.post("/train")
 def start_train(body: schemas.YoloTrainRequest, db: Session = Depends(get_db)):
     """Samme som POST /api/train-jobs/start med valgfri overstyring (bakoverkompatibel)."""
+    recover_stale_train_jobs(db)
     if has_active_train_job(db):
         raise HTTPException(409, "En treningsjobb er allerede i kø eller kjører")
     override = {
@@ -63,5 +64,4 @@ def start_train(body: schemas.YoloTrainRequest, db: Session = Depends(get_db)):
     job = create_train_job(db, trigger="manual", config_override=override)
     db.commit()
     db.refresh(job)
-    start_train_job_thread(job.id)
-    return {"ok": True, "job_id": job.id, "message": "Treningsjobb startet (se /api/train-jobs)."}
+    return {"ok": True, "job_id": job.id, "message": "Treningsjobb lagt i kø (worker kjører den snart)."}

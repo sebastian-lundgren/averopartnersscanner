@@ -14,6 +14,9 @@ type TrainJob = {
   config_json: Record<string, unknown> | null;
   export_counts_json: Record<string, unknown> | null;
   metrics_json: Record<string, number> | null;
+  cancel_requested?: boolean;
+  heartbeat_at?: string | null;
+  runner_kind?: string | null;
   new_annotations_snapshot: number | null;
   candidate_model_version_id: number | null;
   activated_new_model: boolean;
@@ -91,7 +94,8 @@ export default function TrainingPanel({ versions }: { versions: Mv[] }) {
       const r = await fetch(`${API_BASE}/api/train-jobs/cancel-active`, { method: "POST" });
       const raw = await r.json();
       if (!r.ok) throw new Error(typeof raw?.detail === "string" ? raw.detail : JSON.stringify(raw));
-      setMsg(`Stopp sendt for jobb #${(raw as { job_id: number }).job_id}`);
+      const out = raw as { job_id: number | null; message?: string };
+      setMsg(out.job_id ? `Stopp sendt for jobb #${out.job_id}` : out.message || "Ingen aktiv treningsjobb");
       await refresh();
     } catch (e) {
       setMsg(e instanceof Error ? e.message : "Feil");
@@ -125,11 +129,11 @@ export default function TrainingPanel({ versions }: { versions: Mv[] }) {
       <p style={{ fontSize: 15, marginTop: 0 }}>
         {trainingBusy ? (
           <>
-            <strong style={{ color: "var(--accent, #0a0)" }}>Trening pågår</strong>
+            <strong style={{ color: "var(--accent, #0a0)" }}>Trening aktiv</strong>
             {activeJob ? (
               <>
                 {" "}
-                — jobb #{activeJob.id} ({activeJob.status})
+                — jobb #{activeJob.id} ({activeJob.cancel_requested ? "stopping" : activeJob.status})
               </>
             ) : null}
           </>
@@ -170,7 +174,8 @@ export default function TrainingPanel({ versions }: { versions: Mv[] }) {
       <ul style={{ fontSize: 13, paddingLeft: "1.2rem" }}>
         {jobs.map((job) => (
           <li key={job.id} style={{ marginBottom: 6 }}>
-            <strong>#{job.id}</strong> {job.status} ({job.trigger}) — opprettet {job.created_at}
+            <strong>#{job.id}</strong> {job.cancel_requested && job.status === "running" ? "stopping" : job.status} (
+            {job.trigger}) — opprettet {job.created_at}
             <span>
               {" "}
               ·{" "}

@@ -265,6 +265,10 @@ class TrainJobOut(BaseModel):
     config_json: dict[str, Any] | None
     export_counts_json: dict[str, Any] | None
     metrics_json: dict[str, Any] | None
+    cancel_requested: bool = False
+    heartbeat_at: datetime | None = None
+    runner_kind: str | None = None
+    external_job_id: str | None = None
     new_annotations_snapshot: int | None
     candidate_model_version_id: int | None
     activated_new_model: bool

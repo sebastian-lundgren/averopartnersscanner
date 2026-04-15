@@ -14,3 +14,11 @@ services:
         && .venv-runner/bin/python -m playwright install --with-deps chromium
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     plan: starter
+  - type: worker
+    name: streetview-scanner-train-worker
+    runtime: python
+    rootDir: backend
+    buildCommand: |
+      pip install -r requirements.txt
+    startCommand: python -m app.train_worker
+    plan: starter

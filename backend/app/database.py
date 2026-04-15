@@ -105,6 +105,10 @@ def apply_schema_patches():
         "locations_plan_json",
         "ALTER TABLE streetview_scan_jobs ADD COLUMN locations_plan_json TEXT",
     )
+    _add("train_jobs", "cancel_requested", "ALTER TABLE train_jobs ADD COLUMN cancel_requested BOOLEAN DEFAULT FALSE")
+    _add("train_jobs", "heartbeat_at", "ALTER TABLE train_jobs ADD COLUMN heartbeat_at TIMESTAMP")
+    _add("train_jobs", "runner_kind", "ALTER TABLE train_jobs ADD COLUMN runner_kind VARCHAR(32)")
+    _add("train_jobs", "external_job_id", "ALTER TABLE train_jobs ADD COLUMN external_job_id VARCHAR(128)")
     _ensure_pg_text("scan_attempts", "camera_state")
     _ensure_pg_text("scan_attempts", "rationale")
 

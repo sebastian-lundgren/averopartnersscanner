@@ -1,10 +1,9 @@
-"""YOLO treningsjobb: eksport → trening → validering → ev. aktivering."""
+"""YOLO treningsjobb: eksport → trening → validering → ev. aktivering (worker-drevet)."""
 
 from __future__ import annotations
 
-import threading
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from sqlalchemy import func
@@ -17,9 +16,6 @@ from app.models import TrainJobStatus
 from app.services import settings_store
 from app.services.yolo_export_files import write_yolo_dataset
 
-_cancel_lock = threading.Lock()
-_cancel_events: dict[int, threading.Event] = {}
-
 METRIC_KEY_ALIASES = {
     "map50_95": "mAP50-95",
     "map50": "mAP50",
@@ -28,6 +24,7 @@ METRIC_KEY_ALIASES = {
 }
 
 _YOLO_IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp", ".dng", ".mpo", ".pfm", ".heic")
+TRAIN_HEARTBEAT_STALE_SECONDS = 7200
 
 
 def _count_images_in_dir(path: Path) -> int:
@@ -55,6 +52,51 @@ def has_active_train_job(db: Session) -> bool:
     )
 
 
+def recover_stale_train_jobs(db: Session) -> int:
+    cutoff = datetime.utcnow() - timedelta(seconds=TRAIN_HEARTBEAT_STALE_SECONDS)
+    rows = (
+        db.query(models.TrainJob)
+        .filter(models.TrainJob.status == TrainJobStatus.RUNNING)
+        .filter((models.TrainJob.heartbeat_at.is_(None)) | (models.TrainJob.heartbeat_at < cutoff))
+        .all()
+    )
+    for job in rows:
+        job.status = TrainJobStatus.FAILED
+        job.finished_at = datetime.utcnow()
+        if not job.error_message:
+            job.error_message = "Treningsjobb mistet worker (stale heartbeat) og ble markert som feilet."
+    if rows:
+        db.commit()
+    return len(rows)
+
+
+def claim_next_queued_train_job(db: Session, *, runner_kind: str = "render-worker") -> int | None:
+    recover_stale_train_jobs(db)
+    if (
+        db.query(models.TrainJob)
+        .filter(models.TrainJob.status == TrainJobStatus.RUNNING)
+        .first()
+        is not None
+    ):
+        return None
+    job = (
+        db.query(models.TrainJob)
+        .filter(models.TrainJob.status == TrainJobStatus.QUEUED)
+        .order_by(models.TrainJob.created_at.asc())
+        .first()
+    )
+    if job is None:
+        return None
+    job.status = TrainJobStatus.RUNNING
+    job.started_at = datetime.utcnow()
+    job.error_message = None
+    job.cancel_requested = False
+    job.runner_kind = runner_kind
+    job.heartbeat_at = datetime.utcnow()
+    db.commit()
+    return int(job.id)
+
+
 def default_train_config() -> dict:
     return {
         "base_model": settings.yolo_train_base_model,
@@ -71,6 +113,8 @@ def create_train_job(db: Session, *, trigger: str, config_override: dict | None 
         status=TrainJobStatus.QUEUED,
         trigger=trigger,
         config_json=cfg,
+        cancel_requested=False,
+        runner_kind="render-worker",
         new_annotations_snapshot=count_new_annotations_since_checkpoint(db),
     )
     db.add(job)
@@ -113,34 +157,45 @@ def should_activate_new_model(db: Session, new_metrics: dict) -> bool:
     return new_v >= old_v + float(settings.yolo_activation_min_delta)
 
 
-def _train_cancel_requested(job_id: int) -> bool:
-    with _cancel_lock:
-        ev = _cancel_events.get(job_id)
-        return bool(ev and ev.is_set())
+def _train_cancel_requested(db: Session, job_id: int) -> bool:
+    job = db.get(models.TrainJob, job_id)
+    return bool(job and job.cancel_requested)
 
 
 def signal_cancel_train_job(job_id: int) -> bool:
-    with _cancel_lock:
-        ev = _cancel_events.get(job_id)
-        if ev is None:
+    db = SessionLocal()
+    try:
+        job = db.get(models.TrainJob, job_id)
+        if not job:
             return False
-        ev.set()
+        if job.status in (TrainJobStatus.FINISHED, TrainJobStatus.FAILED, TrainJobStatus.CANCELLED):
+            return True
+        job.cancel_requested = True
+        if job.status == TrainJobStatus.QUEUED:
+            job.status = TrainJobStatus.CANCELLED
+            job.finished_at = datetime.utcnow()
+            job.error_message = "Avbrutt av bruker før start"
+        db.commit()
         return True
+    finally:
+        db.close()
 
 
-def start_train_job_thread(job_id: int) -> None:
-    with _cancel_lock:
-        _cancel_events[job_id] = threading.Event()
-    t = threading.Thread(target=run_train_job_sync, args=(job_id,), daemon=True)
-    t.start()
+def touch_train_job_heartbeat(db: Session, job_id: int) -> None:
+    job = db.get(models.TrainJob, job_id)
+    if not job:
+        return
+    job.heartbeat_at = datetime.utcnow()
+    db.commit()
 
 
 def _finalize_cancelled(db: Session, job_id: int) -> None:
     job = db.get(models.TrainJob, job_id)
-    if job and job.status == TrainJobStatus.RUNNING:
+    if job and job.status in (TrainJobStatus.RUNNING, TrainJobStatus.QUEUED):
         job.status = TrainJobStatus.CANCELLED
         job.finished_at = datetime.utcnow()
         job.error_message = "Avbrutt av bruker"
+        job.cancel_requested = True
         db.commit()
 
 
@@ -148,14 +203,11 @@ def run_train_job_sync(job_id: int) -> None:
     db = SessionLocal()
     try:
         job = db.get(models.TrainJob, job_id)
-        if not job:
+        if not job or job.status != TrainJobStatus.RUNNING:
             return
-        job.status = TrainJobStatus.RUNNING
-        job.started_at = datetime.utcnow()
-        job.error_message = None
-        db.commit()
+        touch_train_job_heartbeat(db, job_id)
 
-        if _train_cancel_requested(job_id):
+        if _train_cancel_requested(db, job_id):
             _finalize_cancelled(db, job_id)
             return
 
@@ -164,8 +216,9 @@ def run_train_job_sync(job_id: int) -> None:
         counts = write_yolo_dataset(db, root, clear_first=True)
         job.export_counts_json = dict(counts)
         db.commit()
+        touch_train_job_heartbeat(db, job_id)
 
-        if _train_cancel_requested(job_id):
+        if _train_cancel_requested(db, job_id):
             _finalize_cancelled(db, job_id)
             return
 
@@ -190,6 +243,7 @@ def run_train_job_sync(job_id: int) -> None:
             "val_files_on_disk": val_files,
         }
         db.commit()
+        touch_train_job_heartbeat(db, job_id)
         if train_files == 0 or val_files == 0:
             total_files = train_files + val_files
             if total_files < 2:
@@ -215,7 +269,8 @@ def run_train_job_sync(job_id: int) -> None:
         model = YOLO(base)
 
         def on_train_epoch_end(trainer):
-            if _train_cancel_requested(job_id):
+            touch_train_job_heartbeat(db, job_id)
+            if _train_cancel_requested(db, job_id):
                 trainer.stop = True
 
         model.add_callback("on_train_epoch_end", on_train_epoch_end)
@@ -233,14 +288,15 @@ def run_train_job_sync(job_id: int) -> None:
             train_kw["device"] = dev
 
         model.train(**train_kw)
+        touch_train_job_heartbeat(db, job_id)
 
-        if _train_cancel_requested(job_id):
+        if _train_cancel_requested(db, job_id):
             _finalize_cancelled(db, job_id)
             return
 
         best = Path(project) / run_name / "weights" / "best.pt"
         if not best.is_file():
-            if _train_cancel_requested(job_id):
+            if _train_cancel_requested(db, job_id):
                 _finalize_cancelled(db, job_id)
                 return
             raise RuntimeError(f"Fant ikke best.pt under {best}")
@@ -277,6 +333,8 @@ def run_train_job_sync(job_id: int) -> None:
         job.metrics_json = metrics
         job.candidate_model_version_id = mv.id
         job.activated_new_model = activated
+        job.cancel_requested = False
+        job.heartbeat_at = datetime.utcnow()
         db.commit()
     except Exception as e:
         try:
@@ -288,12 +346,11 @@ def run_train_job_sync(job_id: int) -> None:
                 job.status = TrainJobStatus.FAILED
                 job.finished_at = datetime.utcnow()
                 job.error_message = str(e)[:8000]
+                job.heartbeat_at = datetime.utcnow()
                 db.commit()
         except Exception:
             db.rollback()
     finally:
-        with _cancel_lock:
-            _cancel_events.pop(job_id, None)
         db.close()
 
 
@@ -307,8 +364,7 @@ def maybe_auto_enqueue_after_annotation() -> None:
             return
         if has_active_train_job(db):
             return
-        job = create_train_job(db, trigger="auto")
+        create_train_job(db, trigger="auto")
         db.commit()
-        start_train_job_thread(job.id)
     finally:
         db.close()
