@@ -59,7 +59,7 @@ class Settings(BaseSettings):
     yolo_train_base_model: str = "yolov8s.pt"
     yolo_train_epochs: int = 50
     yolo_train_imgsz: int = 640
-    yolo_train_batch: int = 4
+    yolo_train_batch: int = 2
     yolo_train_device: str = ""  # tom = auto
     yolo_train_min_train_images: int = 5
     yolo_train_min_val_images: int = 2

@@ -164,7 +164,7 @@ class ScanItemComplete(BaseModel):
 class YoloTrainRequest(BaseModel):
     epochs: int = 50
     imgsz: int = 640
-    batch: int = 4
+    batch: int = 2
     base_model: str = "yolov8s.pt"
     name: str = "train_run"
     device: str | None = None
