@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import resource
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -30,6 +32,26 @@ TRAIN_STOPPING_STALE_SECONDS = 300
 
 def _count_images_in_dir(path: Path) -> int:
     return sum(1 for f in path.iterdir() if f.is_file() and f.suffix.lower() in _YOLO_IMAGE_EXTS)
+
+
+def _current_rss_mb() -> float:
+    # Linux/Render: read current RSS directly from /proc.
+    try:
+        statm = Path("/proc/self/statm").read_text(encoding="utf-8").split()
+        if len(statm) >= 2:
+            rss_pages = int(statm[1])
+            page_size = os.sysconf("SC_PAGE_SIZE")
+            return float(rss_pages * page_size) / (1024.0 * 1024.0)
+    except Exception:
+        pass
+    # Fallback to ru_maxrss when current RSS is unavailable.
+    return _peak_rss_mb()
+
+
+def _peak_rss_mb() -> float:
+    rss = float(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+    # On Linux ru_maxrss is KB; on some systems it can be bytes.
+    return rss / (1024.0 if rss < 10_000_000 else 1024.0 * 1024.0)
 
 
 def count_new_annotations_since_checkpoint(db: Session) -> int:
@@ -205,6 +227,10 @@ def touch_train_job_heartbeat(db: Session, job_id: int, *, min_interval_seconds:
     ):
         return
     job.heartbeat_at = now
+    last_rss = round(_current_rss_mb(), 2)
+    peak_rss = round(_peak_rss_mb(), 2)
+    job.last_rss_mb = last_rss
+    job.peak_rss_mb = max(float(job.peak_rss_mb or 0.0), peak_rss)
     db.commit()
 
 
@@ -215,6 +241,8 @@ def _finalize_cancelled(db: Session, job_id: int) -> None:
         job.finished_at = datetime.utcnow()
         job.error_message = "Avbrutt av bruker"
         job.cancel_requested = True
+        job.last_rss_mb = round(_current_rss_mb(), 2)
+        job.peak_rss_mb = max(float(job.peak_rss_mb or 0.0), round(_peak_rss_mb(), 2))
         db.commit()
 
 
@@ -360,6 +388,8 @@ def run_train_job_sync(job_id: int) -> None:
         job.activated_new_model = activated
         job.cancel_requested = False
         job.heartbeat_at = datetime.utcnow()
+        job.last_rss_mb = round(_current_rss_mb(), 2)
+        job.peak_rss_mb = max(float(job.peak_rss_mb or 0.0), round(_peak_rss_mb(), 2))
         db.commit()
     except Exception as e:
         try:
@@ -372,6 +402,8 @@ def run_train_job_sync(job_id: int) -> None:
                 job.finished_at = datetime.utcnow()
                 job.error_message = str(e)[:8000]
                 job.heartbeat_at = datetime.utcnow()
+                job.last_rss_mb = round(_current_rss_mb(), 2)
+                job.peak_rss_mb = max(float(job.peak_rss_mb or 0.0), round(_peak_rss_mb(), 2))
                 db.commit()
         except Exception:
             db.rollback()
